@@ -11,11 +11,12 @@ import ErrorBoundary from '@/components/ErrorBoundary'
 type SortKey = 'ip' | 'hostname' | 'last_seen' | 'status'
 type SortDir = 'asc' | 'desc'
 type ScanState = 'idle' | 'running' | 'done' | 'error'
-type LocationFilter = 'all' | 'MSP' | 'PHX'
+type LocationFilter = 'all' | 'MSP' | 'PHX' | 'CBN'
 
-const LOC_CONFIG: Record<string, { label: string; dot: string; badge: string; border: string }> = {
-  MSP: { label: 'Minneapolis', dot: '🔵', badge: 'text-blue-400 border-blue-400/40 bg-blue-400/10', border: 'border-l-blue-500' },
-  PHX: { label: 'Phoenix',     dot: '🔴', badge: 'text-red-400  border-red-400/40  bg-red-400/10',  border: 'border-l-red-500'  },
+const LOC_CONFIG: Record<string, { label: string; btn: string; dot: string; badge: string; border: string }> = {
+  MSP: { label: 'Minneapolis', btn: 'MSP',   dot: '🔵', badge: 'text-blue-400  border-blue-400/40  bg-blue-400/10',  border: 'border-l-blue-500'  },
+  PHX: { label: 'Phoenix',     btn: 'PHX',   dot: '🔴', badge: 'text-red-400   border-red-400/40   bg-red-400/10',   border: 'border-l-red-500'   },
+  CBN: { label: 'Cabin',       btn: 'Cabin', dot: '🟢', badge: 'text-green-400 border-green-400/40 bg-green-400/10', border: 'border-l-green-500' },
 }
 
 function sortIp(ip: string) {
@@ -265,7 +266,7 @@ export default function DashboardPage() {
           <div className="flex flex-wrap items-center gap-3 mb-4">
             {/* Location filter */}
             <div className="flex items-center gap-1 bg-a-surface border border-a-border rounded-lg p-1">
-              {(['all', 'MSP', 'PHX'] as LocationFilter[]).map(loc => (
+              {(['all', 'MSP', 'PHX', 'CBN'] as LocationFilter[]).map(loc => (
                 <button
                   key={loc}
                   onClick={() => { setLocFilter(loc); setPage(0) }}
@@ -275,7 +276,7 @@ export default function DashboardPage() {
                       : 'text-a-muted hover:text-a-text'
                   }`}
                 >
-                  {loc === 'all' ? 'All' : `${LOC_CONFIG[loc]?.dot} ${loc}`}
+                  {loc === 'all' ? 'All' : `${LOC_CONFIG[loc]?.dot} ${LOC_CONFIG[loc]?.btn ?? loc}`}
                 </button>
               ))}
             </div>
@@ -321,7 +322,19 @@ export default function DashboardPage() {
               <span className="animate-spin-fast mr-2">◌</span>Loading…
             </div>
           ) : filtered.length === 0 ? (
-            <div className="text-center py-16 text-a-muted text-sm">No devices match the current filters.</div>
+            <div className="text-center py-16 text-a-muted text-sm">
+              No devices match the current filters.
+              {locFilter !== 'all' && (
+                <div className="mt-2">
+                  <button
+                    onClick={() => { setLocFilter('all'); setPage(0) }}
+                    className="text-a-teal underline hover:no-underline"
+                  >
+                    Show all locations
+                  </button>
+                </div>
+              )}
+            </div>
           ) : (
             <div className="bg-a-surface border border-a-border rounded-lg overflow-hidden">
               <table className="w-full text-xs">
