@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { getWeeklyReport, fmtDate, fmtBytes, type WeeklySummary } from '@/lib/argus'
+import ErrorBoundary from '@/components/ErrorBoundary'
 
 const PRINT_CSS = `
 @media print {
@@ -62,6 +63,7 @@ export default function ReportPage() {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-8">
+        <ErrorBoundary label="Weekly Report">
         {loading && (
           <div className="flex items-center justify-center min-h-[50vh] text-a-muted text-sm">
             <span className="animate-spin-fast mr-2">◌</span>Loading report…
@@ -190,6 +192,7 @@ export default function ReportPage() {
             )}
           </>
         )}
+        </ErrorBoundary>
       </main>
     </div>
   )

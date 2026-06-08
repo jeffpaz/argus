@@ -7,6 +7,7 @@ import {
   getDeviceDetail, getDevicePortHistory, getDeviceAnomalies,
   fmtDate, type DeviceDetail, type PortScanSnapshot, type Anomaly, type PortInfo,
 } from '@/lib/argus'
+import ErrorBoundary from '@/components/ErrorBoundary'
 
 const HIGH_RISK_PORTS   = new Set([21, 23, 445, 3389, 135, 139])
 const MEDIUM_RISK_PORTS = new Set([22, 3306, 5432, 6379, 27017, 5900])
@@ -100,14 +101,17 @@ function DeviceContent() {
       <div className="bg-a-surface border border-a-border rounded-lg px-6 py-5 mb-6">
         <div className="flex items-start justify-between flex-wrap gap-4">
           <div>
-            <h1 className="text-lg font-bold text-a-text">
-              {device.hostname || device.ip}
+            <h1 className="text-lg font-bold text-a-text flex items-center flex-wrap gap-2">
+              {device.hostname || device.firewalla_name || device.ip}
+              {!device.hostname && device.firewalla_name && (
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 border rounded border-orange-400/40 bg-orange-400/10 text-orange-400">FW</span>
+              )}
               <OsAccuracyBadge accuracy={device.os_accuracy} />
             </h1>
             <div className="text-xs text-a-muted mt-1 space-x-4">
               <span className="text-a-teal font-medium">{device.ip}</span>
               <span>{device.mac}</span>
-              {device.vendor && <span>{device.vendor}</span>}
+              {(device.vendor || device.manufacturer) && <span>{device.vendor || device.manufacturer}</span>}
             </div>
             {device.os && <div className="text-xs text-a-muted mt-1">{device.os}</div>}
           </div>
@@ -130,6 +134,39 @@ function DeviceContent() {
         </div>
       </div>
 
+      {/* Firewalla Enrichment */}
+      {(device.firewalla_name || device.manufacturer || device.device_type || device.firewalla_group) && (
+        <div className="bg-a-surface border border-a-border border-l-4 border-l-orange-500/60 rounded-lg px-6 py-4 mb-6">
+          <h2 className="text-[10px] text-a-muted uppercase tracking-wider mb-3">🔥 Firewalla</h2>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
+            {device.firewalla_name && (
+              <div>
+                <div className="text-[10px] text-a-muted uppercase tracking-wider mb-1">Device Name</div>
+                <div className="text-a-text font-medium">{device.firewalla_name}</div>
+              </div>
+            )}
+            {device.manufacturer && (
+              <div>
+                <div className="text-[10px] text-a-muted uppercase tracking-wider mb-1">Manufacturer</div>
+                <div className="text-a-text">{device.manufacturer}</div>
+              </div>
+            )}
+            {device.device_type && (
+              <div>
+                <div className="text-[10px] text-a-muted uppercase tracking-wider mb-1">Type</div>
+                <div className="text-a-text capitalize">{device.device_type}</div>
+              </div>
+            )}
+            {device.firewalla_group && (
+              <div>
+                <div className="text-[10px] text-a-muted uppercase tracking-wider mb-1">Group</div>
+                <div className="text-a-text">{device.firewalla_group}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="grid lg:grid-cols-2 gap-6 mb-6">
         {/* Port History Timeline */}
         <div className="bg-a-surface border border-a-border rounded-lg p-5">
@@ -142,13 +179,13 @@ function DeviceContent() {
                 <div key={snap.scan_id} className="border-l-2 border-a-border pl-3 text-xs">
                   <div className="text-a-muted text-[10px]">{fmtDate(snap.scanned_at)}</div>
                   <div className="flex flex-wrap gap-1 mt-1">
-                    {snap.added.map(p => (
+                    {(snap.added ?? []).map(p => (
                       <span key={p} className="px-1.5 py-0.5 bg-a-green/10 border border-a-green/30 text-a-green rounded text-[10px]">+{p}</span>
                     ))}
-                    {snap.removed.map(p => (
+                    {(snap.removed ?? []).map(p => (
                       <span key={p} className="px-1.5 py-0.5 bg-a-red/10 border border-a-red/30 text-a-red rounded text-[10px]">−{p}</span>
                     ))}
-                    {snap.added.length === 0 && snap.removed.length === 0 && (
+                    {(snap.added ?? []).length === 0 && (snap.removed ?? []).length === 0 && (
                       <span className="text-a-muted text-[10px]">{snap.ports.length} ports, no change</span>
                     )}
                   </div>
@@ -224,13 +261,15 @@ export default function DevicePage() {
         <span className="text-a-muted text-xs">Device Detail</span>
       </header>
       <main className="max-w-5xl mx-auto px-6 py-8">
-        <Suspense fallback={
-          <div className="flex items-center justify-center min-h-[60vh] text-a-muted text-sm">
-            <span className="animate-spin-fast mr-2">◌</span>Loading…
-          </div>
-        }>
-          <DeviceContent />
-        </Suspense>
+        <ErrorBoundary label="Device Detail">
+          <Suspense fallback={
+            <div className="flex items-center justify-center min-h-[60vh] text-a-muted text-sm">
+              <span className="animate-spin-fast mr-2">◌</span>Loading…
+            </div>
+          }>
+            <DeviceContent />
+          </Suspense>
+        </ErrorBoundary>
       </main>
     </div>
   )
