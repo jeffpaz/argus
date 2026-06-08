@@ -1,0 +1,34 @@
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Frontend build
+frontend/.next/
+frontend/out/
+frontend/node_modules/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+
+# Cloudflare
+.cloudflared/
+
+# Database
+*.db
+network.db
+
+# Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

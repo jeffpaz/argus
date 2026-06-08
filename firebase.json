@@ -1,0 +1,15 @@
+{
+  "hosting": {
+    "public": "frontend/out",
+    "cleanUrls": true,
+    "trailingSlash": false,
+    "rewrites": [
+      { "source": "/device/**", "destination": "/device.html" }
+    ],
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ]
+  }
+}
