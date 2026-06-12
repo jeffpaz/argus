@@ -2,197 +2,253 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import { getWeeklyReport, fmtDate, fmtBytes, type WeeklySummary } from '@/lib/argus'
+import {
+  getLatestReport, listReports, generateReport,
+  fmtDate,
+  type EnhancedReport, type ReportHistoryEntry,
+} from '@/lib/argus'
 import ErrorBoundary from '@/components/ErrorBoundary'
 
-const PRINT_CSS = `
-@media print {
-  body { background: white !important; color: #111 !important; }
-  header, .no-print { display: none !important; }
-  * { border-color: #ccc !important; }
-  [class*="bg-a-"] { background: white !important; }
-  [class*="text-a-teal"], [class*="text-a-green"] { color: #0a7a5c !important; }
-  [class*="text-a-red"]   { color: #c0392b !important; }
-  [class*="text-a-amber"] { color: #b7770d !important; }
-  [class*="text-a-muted"] { color: #555 !important; }
-  [class*="text-a-text"]  { color: #111 !important; }
-}
-`
-
-function SeverityBadge({ severity }: { severity: string }) {
-  const cls = severity === 'high'   ? 'text-a-red   border-a-red/40   bg-a-red/10'
-            : severity === 'medium' ? 'text-a-amber border-a-amber/40 bg-a-amber/10'
-            :                        'text-a-muted border-a-border'
+function GradeBadge({ grade, score }: { grade: string; score: number }) {
+  const cls =
+    grade === 'A' ? 'bg-green-100 text-green-700 border-green-300' :
+    grade === 'B' ? 'bg-teal-100 text-teal-700 border-teal-300' :
+    grade === 'C' ? 'bg-yellow-100 text-yellow-700 border-yellow-300' :
+    grade === 'D' ? 'bg-orange-100 text-orange-700 border-orange-300' :
+                    'bg-red-100 text-red-700 border-red-300'
   return (
-    <span className={`inline-block px-2 py-0.5 text-[10px] font-semibold border rounded uppercase tracking-wider ${cls}`}>
-      {severity}
-    </span>
+    <div className={`inline-flex flex-col items-center justify-center w-20 h-20 rounded-2xl border-2 ${cls}`}>
+      <span className="text-3xl font-bold leading-none">{grade}</span>
+      <span className="text-[11px] font-semibold mt-0.5">{score}/100</span>
+    </div>
   )
 }
 
+function HistoryScore({ score, grade }: { score: number | null; grade: string | null }) {
+  if (score === null || grade === null) return <span className="text-gray-400 text-xs">—</span>
+  const color =
+    grade === 'A' ? 'text-green-600' :
+    grade === 'B' ? 'text-teal-600' :
+    grade === 'C' ? 'text-yellow-600' :
+    grade === 'D' ? 'text-orange-600' : 'text-red-600'
+  return <span className={`text-xs font-bold ${color}`}>{grade} {score}</span>
+}
+
 export default function ReportPage() {
-  const [report,  setReport]  = useState<WeeklySummary | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error,   setError]   = useState('')
+  const [report,      setReport]      = useState<EnhancedReport | null>(null)
+  const [history,     setHistory]     = useState<ReportHistoryEntry[]>([])
+  const [loading,     setLoading]     = useState(true)
+  const [generating,  setGenerating]  = useState(false)
+  const [error,       setError]       = useState('')
+  const [genError,    setGenError]    = useState('')
 
   useEffect(() => {
-    getWeeklyReport()
-      .then(setReport)
-      .catch(e => setError(String(e)))
-      .finally(() => setLoading(false))
+    Promise.allSettled([getLatestReport(), listReports(20)]).then(([r, h]) => {
+      if (r.status === 'fulfilled') setReport(r.value)
+      else setError(String(r.reason))
+      if (h.status === 'fulfilled') setHistory(h.value)
+    }).finally(() => setLoading(false))
   }, [])
+
+  async function handleGenerate() {
+    setGenerating(true)
+    setGenError('')
+    try {
+      await generateReport()
+      const [r, h] = await Promise.all([getLatestReport(), listReports(20)])
+      setReport(r)
+      setHistory(h)
+    } catch (e) {
+      setGenError(String(e))
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  function handleDownload() {
+    if (!report?.html_content) return
+    const blob = new Blob([report.html_content], { type: 'text/html' })
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href     = url
+    a.download = `argus-report-${report.report_date}.html`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const s = report?.summary
 
   return (
     <div className="min-h-screen bg-a-bg text-a-text font-sans">
-      <style dangerouslySetInnerHTML={{ __html: PRINT_CSS }} />
-
-      <header className="no-print sticky top-0 z-10 bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between shadow-sm">
+      <header className="sticky top-0 z-10 bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-3">
           <Link href="/" className="text-gray-500 hover:text-indigo-600 text-sm transition-colors font-medium">← Dashboard</Link>
           <span className="text-gray-200 select-none">|</span>
           <span className="text-gray-900 font-bold text-sm">🛡️ Argus</span>
           <span className="text-gray-200 select-none">|</span>
-          <span className="text-gray-400 text-xs">Weekly Report</span>
+          <span className="text-gray-400 text-xs">Security Report</span>
         </div>
-        <button
-          onClick={() => window.print()}
-          className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-600 text-xs font-semibold rounded-lg transition-colors"
-        >
-          ↓ Download as PDF
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleGenerate}
+            disabled={generating}
+            className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-50"
+          >
+            {generating ? <span className="animate-spin-fast">◌</span> : '⚡'}
+            {generating ? 'Generating…' : 'Generate Now'}
+          </button>
+          {report?.html_content && (
+            <button
+              onClick={handleDownload}
+              className="flex items-center gap-2 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-indigo-200 text-indigo-600 text-xs font-semibold rounded-lg transition-colors"
+            >
+              ↓ Download HTML
+            </button>
+          )}
+        </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-6 py-8">
-        <ErrorBoundary label="Weekly Report">
-        {loading && (
-          <div className="flex items-center justify-center min-h-[50vh] text-a-muted text-sm">
-            <span className="animate-spin-fast mr-2">◌</span>Loading report…
+      <main className="max-w-6xl mx-auto px-6 py-8 flex gap-6">
+        {/* ── Sidebar: history ─────────────────────────────── */}
+        <aside className="w-52 shrink-0">
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden sticky top-20">
+            <div className="px-4 py-3 border-b border-gray-100">
+              <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Report History</span>
+            </div>
+            {history.length === 0 ? (
+              <div className="px-4 py-3 text-xs text-gray-400">No reports yet</div>
+            ) : (
+              <ul className="divide-y divide-gray-100 max-h-[70vh] overflow-y-auto">
+                {history.map(h => (
+                  <li
+                    key={h.report_date}
+                    className={`px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors ${
+                      report?.report_date === h.report_date ? 'bg-indigo-50 border-l-2 border-indigo-400' : ''
+                    }`}
+                    onClick={async () => {
+                      if (report?.report_date === h.report_date) return
+                      const r = await getLatestReport()
+                      setReport(r)
+                    }}
+                  >
+                    <div className="text-xs font-semibold text-gray-700">{h.report_date}</div>
+                    <div className="mt-0.5">
+                      <HistoryScore score={h.health_score} grade={h.health_grade} />
+                    </div>
+                    <div className="text-[10px] text-gray-400 mt-0.5">{fmtDate(h.generated_at)}</div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-        )}
+        </aside>
 
-        {error && (
-          <div className="border border-a-red/40 bg-a-red/5 text-a-red rounded px-4 py-3 text-sm mb-6">
-            ⚠ Could not load report: {error}
-          </div>
-        )}
-
-        {report && (
-          <>
-            {/* Report Header */}
-            <div className="mb-8">
-              <h1 className="text-xl font-bold text-a-text mb-1">Weekly Security Report</h1>
-              <div className="text-xs text-a-muted">
-                {report.period.start
-                  ? `${fmtDate(report.period.start)} → ${fmtDate(report.period.end)}`
-                  : fmtDate(report.generated_at)
-                }
-                <span className="ml-4 text-a-border">Generated {fmtDate(report.generated_at)}</span>
+        {/* ── Main content ─────────────────────────────────── */}
+        <div className="flex-1 min-w-0">
+          <ErrorBoundary label="Security Report">
+            {loading && (
+              <div className="flex items-center justify-center min-h-[50vh] text-a-muted text-sm">
+                <span className="animate-spin-fast mr-2">◌</span>Loading report…
               </div>
-            </div>
+            )}
 
-            {/* Summary Cards */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-              {[
-                { label: 'Active Devices', value: report.active_devices,         accent: 'text-a-green' },
-                { label: 'New This Week',  value: report.new_devices.length,      accent: 'text-a-teal'  },
-                { label: 'Open Anomalies', value: report.open_anomalies,          accent: report.open_anomalies > 0 ? 'text-a-red' : 'text-a-green' },
-                { label: 'Recommendations',value: report.recommendations.length,  accent: 'text-a-amber' },
-              ].map(c => (
-                <div key={c.label} className="bg-a-surface border border-a-border rounded-lg px-5 py-4">
-                  <div className="text-[10px] text-a-muted uppercase tracking-wider mb-2">{c.label}</div>
-                  <div className={`text-2xl font-semibold ${c.accent}`}>{c.value}</div>
-                </div>
-              ))}
-            </div>
+            {error && (
+              <div className="border border-red-200 bg-red-50 text-red-700 rounded px-4 py-3 text-sm mb-6">
+                ⚠ Could not load report: {error}
+              </div>
+            )}
 
-            {/* New Devices */}
-            {report.new_devices.length > 0 && (
-              <section className="mb-8">
-                <h2 className="text-[10px] text-a-muted uppercase tracking-wider mb-3">New Devices This Week</h2>
-                <div className="bg-a-surface border border-a-border rounded-lg overflow-hidden">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-a-border text-a-muted">
-                        {['IP', 'Hostname', 'MAC', 'First Seen'].map(h => (
-                          <th key={h} className="text-left px-4 py-3 text-[10px] uppercase tracking-wider">{h}</th>
+            {genError && (
+              <div className="border border-red-200 bg-red-50 text-red-700 rounded px-4 py-3 text-sm mb-6">
+                ⚠ Generate failed: {genError}
+              </div>
+            )}
+
+            {!loading && !report && !error && (
+              <div className="flex flex-col items-center justify-center min-h-[50vh] gap-4 text-center">
+                <div className="text-5xl">📊</div>
+                <p className="text-gray-500 text-sm">No report generated yet.</p>
+                <button
+                  onClick={handleGenerate}
+                  disabled={generating}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-lg disabled:opacity-50"
+                >
+                  {generating ? 'Generating…' : 'Generate First Report'}
+                </button>
+              </div>
+            )}
+
+            {s && report && (
+              <>
+                {/* ── Health Score Header ── */}
+                <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6 flex items-start gap-6">
+                  <GradeBadge grade={s.health_grade} score={s.health_score} />
+                  <div className="flex-1 min-w-0">
+                    <h1 className="text-lg font-bold text-gray-900 mb-0.5">Security Health Score</h1>
+                    <div className="text-xs text-gray-500 mb-3">
+                      Week of {s.week} · Generated {fmtDate(report.generated_at)}
+                    </div>
+                    {s.health_deductions.length > 0 && (
+                      <ul className="space-y-0.5 mb-2">
+                        {s.health_deductions.map((d, i) => (
+                          <li key={i} className="text-xs text-red-600 flex items-center gap-1.5">
+                            <span>▼</span>{d}
+                          </li>
                         ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {report.new_devices.map((d, i) => (
-                        <tr
-                          key={d.mac}
-                          className={`border-b border-a-border/40 hover:bg-a-border/20 cursor-pointer transition-colors ${i % 2 === 0 ? '' : 'bg-a-bg/30'}`}
-                          onClick={() => window.location.href = `/device?mac=${encodeURIComponent(d.mac)}`}
-                        >
-                          <td className="px-4 py-3 text-a-teal font-medium">{d.ip}</td>
-                          <td className="px-4 py-3 text-a-text">{d.hostname || <span className="text-a-muted italic">unknown</span>}</td>
-                          <td className="px-4 py-3 text-a-muted">{d.mac}</td>
-                          <td className="px-4 py-3 text-a-muted">{fmtDate(d.first_seen)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </ul>
+                    )}
+                    {s.health_bonuses.length > 0 && (
+                      <ul className="space-y-0.5">
+                        {s.health_bonuses.map((b, i) => (
+                          <li key={i} className="text-xs text-green-600 flex items-center gap-1.5">
+                            <span>▲</span>{b}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                 </div>
-              </section>
-            )}
 
-            {/* Threat Events */}
-            <section className="mb-8">
-              <h2 className="text-[10px] text-a-muted uppercase tracking-wider mb-3">Threat Events</h2>
-              {report.anomalies.length === 0 ? (
-                <div className="bg-a-surface border border-a-green/30 rounded-lg px-5 py-4 text-a-green text-sm">
-                  ✓ Clean week — no threat events detected.
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {report.anomalies.map(a => (
-                    <div
-                      key={a.id}
-                      className={`flex items-start gap-3 border rounded px-4 py-3 text-sm ${
-                        a.severity === 'high'   ? 'border-a-red/40   bg-a-red/5'
-                      : a.severity === 'medium' ? 'border-a-amber/40 bg-a-amber/5'
-                      :                          'border-a-border    bg-a-surface'
-                      }`}
-                    >
-                      <span>{a.severity === 'high' ? '🔴' : a.severity === 'medium' ? '🟡' : '🔵'}</span>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-semibold uppercase text-[10px] tracking-wide text-a-text">{a.type}</span>
-                          <SeverityBadge severity={a.severity} />
-                          {a.resolved && <span className="text-[10px] text-a-muted uppercase">Resolved</span>}
-                        </div>
-                        <div className="text-xs text-a-muted mt-0.5">{a.description}</div>
-                        <div className="text-[10px] text-a-muted mt-0.5">{fmtDate(a.created_at)}</div>
-                      </div>
+                {/* ── Summary Stats ── */}
+                <div className="grid grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+                  {[
+                    { label: 'Total Threats',   value: s.total_threats,        color: s.total_threats > 0 ? 'text-red-600' : 'text-green-600' },
+                    { label: 'Unresolved',       value: s.unresolved_threats,   color: s.unresolved_threats > 0 ? 'text-red-600' : 'text-green-600' },
+                    { label: 'Critical CVEs',    value: s.critical_cves,        color: s.critical_cves > 0 ? 'text-red-600' : 'text-green-600' },
+                    { label: 'New Devices',      value: s.new_devices,          color: 'text-indigo-600' },
+                    { label: 'VLAN Recs',        value: s.vlan_recommendations, color: s.vlan_recommendations > 0 ? 'text-amber-600' : 'text-green-600' },
+                    { label: 'Outages',          value: s.outages,              color: s.outages > 0 ? 'text-red-600' : 'text-green-600' },
+                  ].map(c => (
+                    <div key={c.label} className="bg-white rounded-lg border border-gray-200 px-3 py-3">
+                      <div className="text-[9px] text-gray-400 uppercase tracking-wider mb-1">{c.label}</div>
+                      <div className={`text-xl font-bold ${c.color}`}>{c.value}</div>
                     </div>
                   ))}
                 </div>
-              )}
-            </section>
 
-            {/* Recommendations */}
-            {report.recommendations.length > 0 && (
-              <section>
-                <h2 className="text-[10px] text-a-muted uppercase tracking-wider mb-3">Recommendations</h2>
-                <div className="space-y-3">
-                  {report.recommendations.map((r, i) => (
-                    <div key={r.id} className="bg-a-surface border border-a-border rounded-lg px-5 py-4 flex gap-4">
-                      <div className="text-a-teal font-bold text-sm w-6 flex-shrink-0 mt-0.5">
-                        {r.icon || String(i + 1).padStart(2, '0')}
-                      </div>
-                      <div>
-                        <div className="text-sm font-semibold text-a-text mb-1">{r.title}</div>
-                        <div className="text-xs text-a-muted">{r.description}</div>
-                      </div>
+                {/* ── Full HTML Report ── */}
+                {report.html_content && (
+                  <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+                    <div className="px-5 py-3 border-b border-gray-100">
+                      <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Full Report</span>
                     </div>
-                  ))}
-                </div>
-              </section>
+                    <iframe
+                      srcDoc={report.html_content}
+                      className="w-full border-0"
+                      style={{ minHeight: '80vh' }}
+                      onLoad={e => {
+                        const iframe = e.currentTarget
+                        const height = iframe.contentDocument?.body?.scrollHeight
+                        if (height) iframe.style.height = `${height + 40}px`
+                      }}
+                      title="Weekly Security Report"
+                    />
+                  </div>
+                )}
+              </>
             )}
-          </>
-        )}
-        </ErrorBoundary>
+          </ErrorBoundary>
+        </div>
       </main>
     </div>
   )

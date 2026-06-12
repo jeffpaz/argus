@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-06-12
+
+### Added
+- Alerts page: Cleartext Protocol Usage table, SSL/TLS Issues table with Run SSL Scan, Network Outages (30-day history), VLAN Recommendations with Implement/Dismiss actions
+- Report page: full rewrite — health score grade badge, history sidebar, Generate Now, Download HTML, iframe report viewer
+- Dashboard: Health Score 5th stat card (A–F), active outage banner, open outages included in Active Threats count
+
+## [1.1.0] — 2026-06-12
+
+### Added
+- Light mode redesign — new color palette, card shadows, Inter font
+- Network Map page (`/map`) — force-directed graph per location
+- Dashboard device history and top-bandwidth charts (Recharts)
+- DNS anomalies panel on dashboard
+- Device type icons, NEW badge, online/offline dot, per-location filter tabs
+- Uptime timeline on device detail page
+
+### Fixed
+- "New only" filter now uses backend `is_new` field instead of broken `status === 'NEW'` check
+
 ## [1.0.2] — 2026-06-07
 
 ### Changed

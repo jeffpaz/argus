@@ -4,7 +4,28 @@ All notable changes to the Argus frontend are documented here.
 
 ---
 
-## 2026-06-12
+## [1.2.0] — 2026-06-12
+
+### Added
+- **Alerts page — Cleartext Protocol Usage section** — table of open cleartext threats (Telnet, FTP, HTTP, LDAP, etc.) with source device, destination port, protocol name, and severity badge. Rendered before SSL issues.
+- **Alerts page — SSL/TLS Issues section** — color-coded SSL threat table: `ssl_expired` (red), `ssl_expiring` (amber), `ssl_self_signed`/`ssl_weak_cipher`/`ssl_cert_change` (yellow). "Run SSL Scan" button triggers `POST /ssl/scan`.
+- **Alerts page — Network Outages (30 days) section** — outage history table with red-tinted rows and pulsing ACTIVE badge for unresolved outages; shows outage type, location, started/resolved times, and duration.
+- **Alerts page — VLAN Recommendations section** — priority-colored left-border cards (red/amber/yellow) with recommendation text, affected count, a monospace Firewalla rule block, and Implement / Dismiss action buttons.
+- **Report page — full rewrite** — replaced the old weekly summary static layout with:
+  - `GradeBadge` component showing letter grade (A–F) + score in a color-coded square
+  - Sticky header with **Generate Now** button (`POST /reports/generate`) and **Download HTML** button (saves `argus-report-{date}.html`)
+  - Scrollable history sidebar (past reports list with grade + date)
+  - Full report rendered in `<iframe srcDoc>` with auto-height resize on load
+- **Dashboard — Health Score card** — 5th summary stat card showing backend health grade + score (e.g. "A 94"); color-coded by grade (green A, yellow B/C, red D/F); navigates to `/report` on click. Dashboard card grid updated to `grid-cols-2 lg:grid-cols-5`.
+- **Dashboard — Active Outage banner** — red banner rendered above summary cards when `GET /outages/current` returns open outages; lists outage type and location per entry with a "View →" link to `/alerts`.
+- **Dashboard — Active Threats count** — now includes open outage count in addition to unresolved threat matches.
+
+### Changed
+- `loadCharts` on dashboard now also calls `getLatestReport()` and `getOpenOutages()` via `Promise.allSettled`.
+
+---
+
+## [1.1.0] — 2026-06-12
 
 ### Added
 - **Light mode redesign** — complete visual overhaul from dark terminal theme to a clean light UI. All `a-*` Tailwind color tokens remapped: `bg #F8F9FC`, `surface #FFFFFF`, `border #E5E7EB`, `text #111827`, `muted #6B7280`, accent `#6366F1` (indigo). Card shadows, hover transitions, and rounded corners added throughout.

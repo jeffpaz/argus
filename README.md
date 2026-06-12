@@ -1,6 +1,6 @@
-# 🛡️ Argus
+# Argus
 
-Argus is a local network monitoring dashboard. It discovers every device on your network, tracks open ports over time, detects anomalies, and generates weekly security reports.
+Argus is a self-hosted network security monitor. It discovers devices across three locations, ingests Firewalla flow logs, analyzes threats, and serves a live dashboard with alerts, a health-scored weekly report, and VLAN recommendations.
 
 **Live:** [argus-pazlabs.web.app](https://argus-pazlabs.web.app) · **API:** `argus-api.pazlabs.io`
 
@@ -8,30 +8,34 @@ Argus is a local network monitoring dashboard. It discovers every device on your
 
 ## Features
 
-- **Device inventory** — discovers hosts by IP, MAC, hostname, vendor, and OS (with confidence %)
-- **Status tracking** — flags devices as `NEW`, `CHANGED`, or `OK` across scans
-- **Port history** — per-device timeline showing ports added or removed each scan
-- **Anomaly detection** — severity-graded alerts (`high`, `medium`, `low`) with open/resolved state
-- **Weekly report** — printable/PDF security summary with new devices, threat events, and recommendations
-- **Manual scan trigger** — kick off a network scan on demand from the dashboard
-- **Filtering & search** — search by IP / hostname / MAC, filter by OS, show new-only, paginate
+- **Multi-location device inventory** — MSP (Minneapolis), PHX (Phoenix), CBN (Cabin); stable UUID identities survive MAC rotation
+- **Threat detection** — behavioral baselines, cleartext protocol detection, threat feed lookups, unusual-hours alerts
+- **SSL/TLS scanning** — expired / expiring / self-signed / weak-cipher / cert-rotation detection
+- **VLAN segmentation recommendations** — per-location with Firewalla rule suggestions
+- **Network outage detection** — LAN, internet, and all-sites outages with auto-resolution
+- **CVE matching** — device service signatures vs NVD data
+- **Weekly security report** — health score (0–100 / A–F), inline-CSS HTML, ntfy delivery
+- **Alert rules engine** — configurable triggers with ntfy cooldown dispatch
 
 ## Stack
 
 | Layer | Technology |
 |---|---|
-| Frontend | Next.js 14 (static export), React 18, TypeScript |
-| Styling | Tailwind CSS v3, JetBrains Mono, dark terminal theme |
+| Frontend | Next.js 14 (static export), React 18, TypeScript, Tailwind CSS v3 |
+| Fonts | Inter (UI), JetBrains Mono (code/IPs/ports) |
 | Hosting | Firebase Hosting (`argus-pazlabs` project) |
-| Backend API | REST service at `argus-api.pazlabs.io` (separate repo) |
+| Backend API | FastAPI on Jetson Orin Nano at `argus-api.pazlabs.io` (see backend repo) |
 
 ## Pages
 
 | Route | Description |
 |---|---|
-| `/` | Main dashboard — summary cards, anomaly alerts, device table |
-| `/device?mac=<mac>` | Device detail — port grid, port history timeline, anomaly log |
-| `/report` | Weekly security report — printable, PDF-exportable |
+| `/` | Dashboard — outage banner, 5 stat cards (devices, new, threats, last scan, health score), bandwidth chart, DNS anomalies, device table |
+| `/alerts` | Alerts — cleartext protocols, SSL/TLS issues, network outages, VLAN recommendations, active threats, CVEs |
+| `/report` | Security report — health score grade, history sidebar, Generate Now, Download HTML, iframe report viewer |
+| `/map` | Network map — force-directed topology per location |
+| `/device?identity_id=` | Device detail — port history, uptime timeline, anomaly log |
+| `/guests` | Guest/lifecycle summary |
 
 ## Getting Started
 
@@ -46,35 +50,40 @@ npm run dev                   # http://localhost:3000
 
 ## Environment Variables
 
-| Variable | Description | Default |
-|---|---|---|
-| `NEXT_PUBLIC_ARGUS_BASE_URL` | Argus backend API base URL | `https://argus-api.pazlabs.io` |
-| `NEXT_PUBLIC_ARGUS_API_KEY` | API key sent as `X-Argus-Key` header | _(empty)_ |
+| Variable | Description |
+|---|---|
+| `NEXT_PUBLIC_ARGUS_BASE_URL` | Argus backend base URL (`https://argus-api.pazlabs.io`) |
+| `NEXT_PUBLIC_ARGUS_API_KEY` | `X-Argus-Key` header value |
 
 ## Build & Deploy
 
 ```bash
 cd frontend
-npm run build               # generates frontend/out/
-
+npm run build              # generates frontend/out/
 cd ..
 firebase deploy --only hosting
 ```
 
 CI/CD: pushes to `main` deploy automatically via Firebase Hosting GitHub integration.
 
-## API Surface
+## API Surface (frontend → backend)
 
-The frontend calls these endpoints on the backend API:
-
-| Method | Path | Description |
+| Method | Path | Used by |
 |---|---|---|
-| `GET` | `/health` | System health, device count, last scan metadata |
-| `GET` | `/devices` | All known devices |
-| `GET` | `/devices/:mac` | Single device detail including port service info |
-| `GET` | `/devices/:mac/ports` | Port scan history (diffs per scan) |
-| `GET` | `/devices/:mac/anomalies` | Anomalies for a specific device |
-| `GET` | `/anomalies` | All anomalies across all devices |
-| `GET` | `/scans` | List of completed scan runs |
-| `POST` | `/scans` | Trigger a new network scan |
-| `GET` | `/reports/weekly` | Weekly security summary |
+| GET | `/health` | Dashboard |
+| GET | `/identities/` | Dashboard, Map |
+| GET | `/flows/threats` | Dashboard, Alerts |
+| GET | `/lifecycle/summary` | Dashboard |
+| GET | `/network/bandwidth` | Dashboard |
+| GET | `/network/dns/anomalies` | Dashboard |
+| GET | `/reports/latest` | Dashboard, Report |
+| GET | `/reports/history` | Report sidebar |
+| POST | `/reports/generate` | Report page |
+| GET | `/outages/current` | Dashboard banner |
+| GET | `/outages/history` | Alerts |
+| GET | `/ssl/issues` | Alerts |
+| POST | `/ssl/scan` | Alerts |
+| GET | `/vlan/recommendations` | Alerts |
+| PATCH | `/vlan/recommendations/{id}` | Alerts |
+| GET | `/cve/matches` | Alerts |
+| GET | `/alerts/rules` | Alerts |

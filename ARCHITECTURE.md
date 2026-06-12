@@ -1,177 +1,107 @@
-# Argus — System Architecture
+# Argus — Frontend Architecture
 
 ## Overview
 
-Argus is a two-tier system: a static Next.js frontend hosted on Firebase, and a backend REST API that runs nmap scans, stores device state, and generates reports.
+Static Next.js 14 app (`output: 'export'`) deployed to Firebase Hosting. All backend data is fetched at runtime from the Argus REST API via Cloudflare Tunnel.
 
 ```
-                ┌─────────────────────────────────┐
-                │         Browser / User           │
-                └───────────────┬─────────────────┘
-                                │ HTTPS
-                ┌───────────────▼─────────────────┐
-                │      Firebase Hosting            │
-                │  argus-pazlabs.web.app           │
-                │  (Next.js static export)         │
-                │                                  │
-                │  /            → Dashboard        │
-                │  /device?mac= → Device Detail    │
-                │  /report      → Weekly Report    │
-                └───────────────┬─────────────────┘
-                                │ HTTPS + X-Argus-Key
-                ┌───────────────▼─────────────────┐
-                │      Argus Backend API           │
-                │  argus-api.pazlabs.io            │
-                │                                  │
-                │  GET  /health                    │
-                │  GET  /devices                   │
-                │  GET  /devices/:mac              │
-                │  GET  /devices/:mac/ports        │
-                │  GET  /devices/:mac/anomalies    │
-                │  GET  /anomalies                 │
-                │  GET  /scans                     │
-                │  POST /scans  (trigger)          │
-                │  GET  /reports/weekly            │
-                └───────────────┬─────────────────┘
-                                │
-                ┌───────────────▼─────────────────┐
-                │      Network Scanner             │
-                │  nmap / host discovery           │
-                │  OS fingerprinting               │
-                │  Port enumeration                │
-                └───────────────┬─────────────────┘
-                                │
-                ┌───────────────▼─────────────────┐
-                │      Device Database             │
-                │  Device inventory                │
-                │  Port scan history (diffs)       │
-                │  Anomaly records                 │
-                │  Scan run metadata               │
-                └─────────────────────────────────┘
+Browser
+  │── GET /                 Firebase Hosting (argus-pazlabs.web.app)
+  │   ← HTML + JS bundle    (Next.js static export, /out/)
+  │
+  │── API calls ──────────▶ argus-api.pazlabs.io (Cloudflare Tunnel)
+      X-Argus-Key                │
+                            Argus FastAPI (Jetson Orin Nano :8400)
 ```
 
 ---
 
-## Frontend
+## Pages
 
-**Repo path:** `frontend/`  
-**Framework:** Next.js 14 with `output: 'export'` (fully static — no server-side rendering)  
-**Deployed to:** Firebase Hosting, `frontend/out/` as the hosting root
+### Dashboard (`app/page.tsx`)
 
-### Pages
+Fires 8 parallel API calls via `Promise.allSettled` on mount:
 
-#### Dashboard (`app/page.tsx`)
+| Call | Data used for |
+|---|---|
+| `getHealth()` | Last scan time, status |
+| `getIdentities()` | Device table, stat cards |
+| `getDnsAnomalies()` | DNS anomaly panel |
+| `getLifecycleSummary()` | Active/new/guest counts |
+| `getBandwidthSummary()` | Bandwidth chart |
+| `getLatestReport()` | Health Score stat card |
+| `getOpenOutages()` | Outage banner, Active Threats count |
+| *(inline)* | Open threats count |
 
-The main view. On load it fires three parallel requests (`getHealth`, `getDevices`, `getAnomalies`) and renders:
+Renders: outage banner (if open outages exist), 5 summary stat cards, bandwidth bar chart, DNS anomaly table, device table with location group headers and sort/filter/pagination.
 
-- **Summary cards** — active device count, new-this-week count, open anomaly count, last scan timestamp
-- **Open anomalies** — top 5 unresolved anomalies with severity coloring
-- **Device table** — sortable by IP / hostname / last seen / status; filterable by search string, OS, and new-only; paginated in pages of 25
-- **Scan trigger** — `POST /scans` with live status feedback
+### Alerts (`app/alerts/page.tsx`)
 
-Clicking a table row navigates to `/device?mac=<mac>`.
+Sections rendered in order:
+1. Active Threat Matches — severity-graded table, Resolve button
+2. CVE Matches — CVSS score, affected device + port
+3. Cleartext Protocol Usage — protocol extracted from `t.detail`, severity badge
+4. SSL/TLS Issues — color-coded by threat type, Run SSL Scan button
+5. Network Outages (30 days) — red rows + pulsing ACTIVE badge for unresolved
+6. VLAN Recommendations — priority-colored left-border cards, Firewalla rule block, Implement / Dismiss buttons
+7. Alert Rules — rule management
 
-#### Device Detail (`app/device/page.tsx`)
+### Report (`app/report/page.tsx`)
 
-Per-device deep-dive, loaded by MAC address from the query string:
+Components:
+- `GradeBadge` — letter grade (A–F) + numeric score, color-coded square
+- `HistoryScore` — compact grade display for sidebar list
+- History sidebar — sticky, scrollable, past reports with `onClick` load
+- Main area — sticky header (Generate Now → `POST /reports/generate`, Download HTML), `<iframe srcDoc>` auto-height report viewer
 
-- **Device header** — IP, MAC, vendor, OS + confidence badge, status badge, first/last seen, port and anomaly counts
-- **Port history** — last 20 scan snapshots, each showing ports added (green) and removed (red)
-- **Open ports grid** — color-coded by risk: high (red: FTP/Telnet/RDP/SMB), medium (amber: SSH/DBs/Redis), safe (green: HTTP/HTTPS), neutral (muted)
-- **Anomaly log** — full history table for this device with type, description, severity, and resolved state
+State: `report: EnhancedReport | null`, `history: ReportHistoryEntry[]`, `generating: boolean`
 
-#### Weekly Report (`app/report/page.tsx`)
+### Map (`app/map/page.tsx`)
 
-A printable security digest:
+Force-directed graph per location using `react-force-graph-2d`. Location cards at top; click to zoom into node graph showing device topology, bandwidth sizing, DNS anomaly flags, and VPN tunnel lines.
 
-- Summary cards (active devices, new this week, open anomalies, recommendation count)
-- New devices table — devices first seen in the current week
-- Threat events — all anomalies from the period
-- Recommendations — actionable security suggestions from the backend
+### Device Detail (`app/device/page.tsx`)
 
-Has CSS `@media print` overrides for clean PDF export via browser print.
-
-### API Client (`lib/argus.ts`)
-
-All backend calls go through two thin wrappers (`argusGet`, `argusPost`) that:
-
-1. Prepend `NEXT_PUBLIC_ARGUS_BASE_URL` to the path
-2. Attach `X-Argus-Key` header when an API key is set
-3. Throw on non-2xx responses
-
-Response shapes are fully typed via exported TypeScript interfaces (`Device`, `Anomaly`, `PortScanSnapshot`, `WeeklySummary`, etc.). Some endpoints return either a bare array or a wrapped object (`{ devices: [...] }`) — the client normalises both.
-
-### Styling
-
-- **Tailwind CSS v3** with a custom `a.*` color palette: `a-bg` (near-black), `a-surface` (dark navy), `a-teal` (primary accent), `a-red/amber/green` (severity colors)
-- **Font:** JetBrains Mono — reinforces the terminal/security aesthetic
-- All colors are defined in `tailwind.config.ts`; no inline style objects except for a few flex layout overrides
+Loaded by `identity_id` query param. Shows: device header (type icon, badges), open port grid (risk-colored), port history timeline, 7-day uptime timeline bar, anomaly log.
 
 ---
 
-## Backend API
+## API Client (`lib/argus.ts`)
 
-The backend is a separate service (not in this repo) reachable at `argus-api.pazlabs.io`. Based on the API surface it:
+All fetch calls go through `argusGet` / `argusPost`:
+- Prepends `NEXT_PUBLIC_ARGUS_BASE_URL`
+- Attaches `X-Argus-Key` header
+- Throws on non-2xx
 
-- Runs **nmap** scans on a schedule (and on demand via `POST /scans`)
-- Maintains a **device inventory** keyed by MAC address — tracking IP, hostname, OS, vendor, and open ports
-- Computes **port diffs** between scan runs, storing per-scan snapshots as `{ added, removed, ports }`
-- Detects **anomalies** (e.g. new device on network, high-risk port opened, OS fingerprint changed) and grades them `low/medium/high`
-- Generates a **weekly report** aggregating new devices, active anomalies, and recommendations
-- Authenticates callers via `X-Argus-Key` header
+Key exports: `getIdentities`, `getOpenOutages`, `getLatestReport`, `getReportHistory`, `generateReport`, `getOutageHistory`, `getSslIssues`, `triggerSslScan`, `getVlanRecommendations`, `patchVlanRecommendation`, `getCveMatches`, `getLifecycleSummary`, `getBandwidthSummary`, `getDnsAnomalies`, `getAlertRules`.
+
+TypeScript interfaces: `DeviceIdentity`, `EnhancedReport`, `ReportHistoryEntry`, `OutageEvent`, `ThreatMatch`, `VlanRecommendation`, `SslCertificate`, `CveMatch`, `LifecycleSummary`.
+
+---
+
+## Styling
+
+- **Tailwind CSS v3** — light mode: `bg-gray-50` background, `bg-white` cards, `border-gray-200`, `text-gray-900`
+- **Accent color** — indigo-600 (#6366F1) for primary actions, stat values, badges
+- **Location colors** — MSP: blue, PHX: orange, CBN: green
+- **Severity colors** — critical/high: red, medium: amber, low: yellow, info: gray
+- **Fonts** — Inter for body/UI, JetBrains Mono (`font-mono`) for IPs, MACs, ports, rule text
 
 ---
 
 ## Deployment
 
-### Firebase Hosting
-
 ```
-argus/
-├── firebase.json          # hosting config — public: frontend/out
-├── .firebaserc            # project: argus-pazlabs
+argus/                        ← this repo
+├── firebase.json             # hosting root: frontend/out; rewrites all → /index.html
+├── .firebaserc               # project: argus-pazlabs
 └── frontend/
-    └── out/               # Next.js static export (generated by npm run build)
+    ├── app/                  # Next.js App Router pages
+    ├── components/           # shared components
+    ├── lib/argus.ts          # typed API client
+    └── out/                  # static export (generated by npm run build)
 ```
 
-`firebase.json` rewrites `/device/**` → `/device.html` so that the MAC query parameter works correctly after a hard refresh (Firebase otherwise serves a 404 on unknown paths).
+`firebase.json` rewrites ensure unknown paths (e.g. `/device`) return `index.html` for client-side routing.
 
-### Build
-
-```bash
-cd frontend
-npm run build    # next build → writes to frontend/out/
-cd ..
-firebase deploy --only hosting
-```
-
-### URL
-
-| Environment | URL |
-|---|---|
-| Production | `https://argus-pazlabs.web.app` |
-| API | `https://argus-api.pazlabs.io` |
-
----
-
-## Data Flow — Dashboard Load
-
-```
-Browser                 Firebase Hosting         Argus API
-  │                           │                      │
-  │── GET /  ────────────────▶│                      │
-  │◀── HTML + JS ────────────│                      │
-  │                           │                      │
-  │── GET /health ───────────────────────────────▶  │
-  │── GET /devices ──────────────────────────────▶  │
-  │── GET /anomalies ────────────────────────────▶  │
-  │                           │                      │
-  │◀── HealthStatus ────────────────────────────────│
-  │◀── Device[] ────────────────────────────────────│
-  │◀── Anomaly[] ───────────────────────────────────│
-  │                           │                      │
-  │ [render summary cards, anomaly banner,            │
-  │  device table with sort/filter/pagination]       │
-```
-
-All three API calls are fired in parallel via `Promise.allSettled` — a failure in one does not block the others from rendering.
+CI/CD via Firebase Hosting GitHub integration: push to `main` → live channel; open PR → preview channel.
