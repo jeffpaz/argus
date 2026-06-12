@@ -30,23 +30,31 @@ async function argusPost<T>(path: string, body?: unknown): Promise<T> {
 export type DeviceStatus = 'NEW' | 'CHANGED' | 'OK'
 
 export interface Device {
-  id:             string
-  ip:             string
-  hostname:       string
-  mac:            string
-  os:             string
-  os_accuracy?:   number
-  vendor?:        string
-  open_ports:     number[]
-  first_seen:     string
-  last_seen:      string
-  status:         DeviceStatus
-  location:       string   // 'MSP' | 'PHX' | ''
-  subnet:         string
-  firewalla_name: string | null
-  manufacturer:   string | null
-  device_type:    string | null
-  firewalla_group:string | null
+  id:              string
+  ip:              string
+  hostname:        string
+  mac:             string
+  os:              string
+  os_accuracy?:    number
+  vendor?:         string
+  open_ports:      number[]
+  first_seen:      string
+  last_seen:       string
+  status:          DeviceStatus
+  location:        string
+  subnet:          string
+  firewalla_name:  string | null
+  manufacturer:    string | null
+  device_type:     string | null
+  firewalla_group: string | null
+  // extended fields from /devices/all and /network/map
+  is_online?:      boolean
+  downtime_since?: string | null
+  bytes_in_24h?:   number
+  bytes_out_24h?:  number
+  flagged_dns?:    boolean
+  friendly_name?:  string
+  is_new?:         boolean
 }
 
 export interface LocationStats {
@@ -111,7 +119,87 @@ export interface WeeklySummary {
   by_location?:    LocationStats[]
 }
 
-// Raw backend shapes (actual API responses differ from the frontend types above)
+export interface UptimeEvent {
+  id:        number
+  mac:       string
+  location:  string
+  event:     'online' | 'offline'
+  timestamp: string
+}
+
+export interface UptimeDetail {
+  mac:           string
+  first_seen:    string
+  last_seen:     string
+  is_online:     boolean
+  downtime_since: string | null
+  uptime_events: UptimeEvent[]
+}
+
+export interface CountHistoryPoint {
+  id:           number
+  timestamp:    string
+  location:     string
+  device_count: number
+  online_count: number
+}
+
+export interface BandwidthPoint {
+  timestamp: string
+  bytes_in:  number
+  bytes_out: number
+}
+
+export interface TopBandwidthDevice {
+  mac:          string
+  location:     string
+  friendly_name: string | null
+  device_name:  string
+  total_in:     number
+  total_out:    number
+  total_bytes:  number
+}
+
+export interface DnsAnomaly {
+  id:          number
+  mac:         string
+  location:    string
+  timestamp:   string
+  domain:      string
+  query_count: number
+  flagged:     number
+  flag_reason: string | null
+  device_name: string
+}
+
+export interface MapDevice {
+  mac:          string
+  ip:           string
+  hostname:     string
+  friendly_name: string
+  device_type:  string
+  is_online:    boolean
+  last_seen:    string | null
+  bytes_in_24h: number
+  bytes_out_24h: number
+  flagged_dns:  boolean
+  open_ports:   number[]
+}
+
+export interface MapLocation {
+  name:         string
+  label:        string
+  subnet:       string
+  online_count: number
+  total_count:  number
+  devices:      MapDevice[]
+}
+
+export interface NetworkMap {
+  locations: MapLocation[]
+}
+
+// Raw backend shapes
 interface RawDevice {
   ip: string; mac: string; hostname: string | null; vendor: string | null
   os_guess: string | null; open_ports: number[]; first_seen: string; last_seen: string
@@ -119,10 +207,12 @@ interface RawDevice {
   location?: string; subnet?: string
   firewalla_name?: string | null; manufacturer?: string | null
   device_type?: string | null; firewalla_group?: string | null
+  is_online?: number | boolean; downtime_since?: string | null
+  bytes_in_24h?: number; bytes_out_24h?: number; flagged_dns?: boolean
+  friendly_name?: string
 }
 interface RawPortSnapshot {
   id: number; device_ip: string; scan_run_id: number; timestamp: string; open_ports: number[]
-  // may also come in normalized shape already
   scan_id?: string; scanned_at?: string; ports?: number[]; added?: number[]; removed?: number[]
 }
 interface RawWeeklyReport {
@@ -167,6 +257,14 @@ export async function getDevices(location?: string): Promise<Device[]> {
   return raw.map(normalizeDevice)
 }
 
+export async function getAllDevices(location?: string, includeOffline = true): Promise<Device[]> {
+  const params = new URLSearchParams()
+  if (location) params.set('location', location)
+  params.set('include_offline', String(includeOffline))
+  const data = await argusGet<RawDevice[]>(`/devices/all?${params}`)
+  return data.map(normalizeDevice)
+}
+
 export async function getDeviceDetail(mac: string): Promise<DeviceDetail> {
   const raw = await argusGet<RawDevice>(`/devices/${encodeURIComponent(mac)}`)
   return normalizeDevice(raw)
@@ -178,12 +276,10 @@ export async function getDevicePortHistory(mac: string): Promise<PortScanSnapsho
   )
   if (!Array.isArray(data)) return data.history ?? []
 
-  // Already normalized (has scan_id/scanned_at/added/removed)
   if (data.length > 0 && 'scan_id' in data[0] && 'added' in data[0]) {
     return data as unknown as PortScanSnapshot[]
   }
 
-  // Raw backend snapshots: compute added/removed by diffing consecutive scans
   const sorted = [...data].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
   return sorted.map((snap, i) => {
     const prevPorts = i > 0 ? sorted[i - 1].open_ports : snap.open_ports
@@ -205,28 +301,68 @@ export async function getDeviceAnomalies(mac: string): Promise<Anomaly[]> {
   return Array.isArray(data) ? data : (data.anomalies ?? [])
 }
 
+export async function getDeviceUptime(mac: string): Promise<UptimeDetail> {
+  return argusGet<UptimeDetail>(`/devices/${encodeURIComponent(mac)}/uptime`)
+}
+
+export async function getCountHistory(days = 30): Promise<CountHistoryPoint[]> {
+  const data = await argusGet<{ days: number; history: CountHistoryPoint[] }>(
+    `/devices/count-history?days=${days}`
+  )
+  return data.history
+}
+
+export async function getNetworkMap(): Promise<NetworkMap> {
+  return argusGet<NetworkMap>('/network/map')
+}
+
+export async function getBandwidthSummary(location?: string): Promise<TopBandwidthDevice[]> {
+  const qs = location ? `?location=${encodeURIComponent(location)}` : ''
+  const data = await argusGet<{ hours: number; top_devices: TopBandwidthDevice[] }>(
+    `/network/bandwidth/summary${qs}`
+  )
+  return data.top_devices
+}
+
+export async function getDnsAnomalies(flagged = true, limit = 20): Promise<DnsAnomaly[]> {
+  const data = await argusGet<{ count: number; anomalies: DnsAnomaly[] }>(
+    `/network/dns/anomalies?flagged=${flagged}&limit=${limit}`
+  )
+  return data.anomalies
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function normalizeDevice(d: RawDevice): Device {
   const raw = d as unknown as Record<string, unknown>
   return {
-    id:          String(d.id ?? d.mac),
-    ip:          d.ip,
-    mac:         d.mac,
-    hostname:    d.hostname ?? '',
-    os:          d.os_guess ?? raw.os as string ?? '',
-    os_accuracy: raw.os_accuracy as number | undefined,
-    vendor:      d.vendor ?? undefined,
-    open_ports:  d.open_ports ?? [],
-    first_seen:  d.first_seen,
-    last_seen:   d.last_seen,
-    status:          ((d.status as DeviceStatus) ?? 'OK'),
-    location:        (raw.location as string) ?? '',
-    subnet:          (raw.subnet as string) ?? '',
-    firewalla_name:  d.firewalla_name ?? null,
-    manufacturer:    d.manufacturer ?? null,
-    device_type:     d.device_type ?? null,
-    firewalla_group: d.firewalla_group ?? null,
+    id:              String(d.id ?? d.mac),
+    ip:              d.ip,
+    mac:             d.mac,
+    hostname:        d.hostname ?? '',
+    os:              d.os_guess ?? raw.os as string ?? '',
+    os_accuracy:     raw.os_accuracy as number | undefined,
+    vendor:          d.vendor ?? undefined,
+    open_ports:      d.open_ports ?? [],
+    first_seen:      d.first_seen,
+    last_seen:       d.last_seen,
+    status:              ((d.status as DeviceStatus) ?? 'OK'),
+    location:            (raw.location as string) ?? '',
+    subnet:              (raw.subnet as string) ?? '',
+    firewalla_name:      d.firewalla_name ?? null,
+    manufacturer:        d.manufacturer ?? null,
+    device_type:         d.device_type ?? null,
+    firewalla_group:     d.firewalla_group ?? null,
+    is_online:           d.is_online != null ? Boolean(d.is_online) : undefined,
+    downtime_since:      d.downtime_since ?? null,
+    bytes_in_24h:        d.bytes_in_24h ?? 0,
+    bytes_out_24h:       d.bytes_out_24h ?? 0,
+    flagged_dns:         d.flagged_dns ?? false,
+    friendly_name:       d.friendly_name ?? d.firewalla_name ?? d.hostname ?? d.ip,
+    is_new:              (raw.is_new as boolean | undefined) ?? (() => {
+      const t = new Date(d.first_seen).getTime()
+      return !isNaN(t) && t >= Date.now() - 5 * 24 * 60 * 60 * 1000
+    })(),
   }
 }
 
@@ -242,4 +378,17 @@ export function fmtBytes(bytes: number): string {
   if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`
   if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`
   return `${(bytes / 1024 ** 3).toFixed(2)} GB`
+}
+
+export function timeAgo(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const diffMs = Date.now() - new Date(iso).getTime()
+  if (diffMs < 0) return 'just now'
+  const diffMin = Math.floor(diffMs / 60_000)
+  if (diffMin < 2) return 'just now'
+  if (diffMin < 60) return `${diffMin}m ago`
+  const diffH = Math.floor(diffMin / 60)
+  if (diffH < 24) return `${diffH}h ago`
+  const diffD = Math.floor(diffH / 24)
+  return `${diffD}d ago`
 }

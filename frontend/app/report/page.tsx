@@ -43,20 +43,20 @@ export default function ReportPage() {
   }, [])
 
   return (
-    <div className="min-h-screen bg-a-bg text-a-text font-mono">
+    <div className="min-h-screen bg-a-bg text-a-text font-sans">
       <style dangerouslySetInnerHTML={{ __html: PRINT_CSS }} />
 
-      <header className="no-print sticky top-0 z-10 bg-a-surface/95 backdrop-blur border-b border-a-border px-6 py-3 flex items-center justify-between">
+      <header className="no-print sticky top-0 z-10 bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-3">
-          <Link href="/" className="text-a-muted hover:text-a-text text-sm transition-colors">← Dashboard</Link>
-          <span className="text-a-border">|</span>
-          <span className="text-a-teal font-semibold text-sm">🛡️ Argus</span>
-          <span className="text-a-border">|</span>
-          <span className="text-a-muted text-xs">Weekly Report</span>
+          <Link href="/" className="text-gray-500 hover:text-indigo-600 text-sm transition-colors font-medium">← Dashboard</Link>
+          <span className="text-gray-200 select-none">|</span>
+          <span className="text-gray-900 font-bold text-sm">🛡️ Argus</span>
+          <span className="text-gray-200 select-none">|</span>
+          <span className="text-gray-400 text-xs">Weekly Report</span>
         </div>
         <button
           onClick={() => window.print()}
-          className="flex items-center gap-2 px-3 py-1.5 bg-a-teal/10 hover:bg-a-teal/20 border border-a-teal/40 text-a-teal text-xs font-semibold rounded transition-colors"
+          className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-600 text-xs font-semibold rounded-lg transition-colors"
         >
           ↓ Download as PDF
         </button>

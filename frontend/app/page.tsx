@@ -3,20 +3,48 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import {
-  getHealth, getDevices, getAnomalies, triggerScan,
-  fmtDate, type HealthStatus, type Device, type Anomaly,
+  getHealth, getAllDevices, getAnomalies, triggerScan, getCountHistory,
+  getBandwidthSummary, getDnsAnomalies,
+  fmtDate, fmtBytes, timeAgo,
+  type HealthStatus, type Device, type Anomaly,
+  type CountHistoryPoint, type TopBandwidthDevice, type DnsAnomaly,
 } from '@/lib/argus'
 import ErrorBoundary from '@/components/ErrorBoundary'
+import {
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
+  Legend, ResponsiveContainer, CartesianGrid, Cell,
+} from 'recharts'
 
 type SortKey = 'ip' | 'hostname' | 'last_seen' | 'status'
 type SortDir = 'asc' | 'desc'
 type ScanState = 'idle' | 'running' | 'done' | 'error'
 type LocationFilter = 'all' | 'MSP' | 'PHX' | 'CBN'
 
-const LOC_CONFIG: Record<string, { label: string; btn: string; dot: string; badge: string; border: string }> = {
-  MSP: { label: 'Minneapolis', btn: 'MSP',   dot: '🔵', badge: 'text-blue-400  border-blue-400/40  bg-blue-400/10',  border: 'border-l-blue-500'  },
-  PHX: { label: 'Phoenix',     btn: 'PHX',   dot: '🔴', badge: 'text-red-400   border-red-400/40   bg-red-400/10',   border: 'border-l-red-500'   },
-  CBN: { label: 'Cabin',       btn: 'Cabin', dot: '🟢', badge: 'text-green-400 border-green-400/40 bg-green-400/10', border: 'border-l-green-500' },
+const LOC_CONFIG: Record<string, { label: string; btn: string; badge: string; border: string; color: string; rowBorder: string }> = {
+  MSP: { label: 'Minneapolis', btn: 'MSP',   badge: 'bg-blue-50   text-blue-600   border-blue-200',  border: 'border-l-blue-400',  color: '#3B82F6', rowBorder: 'border-l-blue-300'  },
+  PHX: { label: 'Phoenix',     btn: 'PHX',   badge: 'bg-orange-50 text-orange-600 border-orange-200', border: 'border-l-orange-400', color: '#F97316', rowBorder: 'border-l-orange-300' },
+  CBN: { label: 'Cabin',       btn: 'Cabin', badge: 'bg-green-50  text-green-600  border-green-200',  border: 'border-l-green-400',  color: '#22C55E', rowBorder: 'border-l-green-300'  },
+}
+
+const DEVICE_TYPE_ICONS: Record<string, string> = {
+  'Mac': '💻',
+  'iOS Device': '📱',
+  'Android Device': '📱',
+  'Router / Firewall': '🔥',
+  'Network Device': '📡',
+  'Security Camera': '📷',
+  'Smart Speaker': '🔊',
+  'Thermostat': '🌡️',
+  'Streaming / TV': '📺',
+  'Printer': '🖨️',
+  'NAS': '🗄️',
+  'Gaming Console': '🎮',
+  'Linux / SBC': '🐧',
+  'Linux Device': '🐧',
+  'Windows PC': '🪟',
+  'Laptop': '💻',
+  'Apple Device': '🍎',
+  'Smart Home Device': '🏠',
 }
 
 function sortIp(ip: string) {
@@ -24,19 +52,15 @@ function sortIp(ip: string) {
 }
 
 function newThisWeek(devices: Device[]) {
-  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000
-  return devices.filter(d => {
-    const t = new Date(d.first_seen).getTime()
-    return !isNaN(t) && t >= cutoff
-  }).length
+  return devices.filter(d => d.is_new).length
 }
 
 function StatusBadge({ status }: { status: Device['status'] }) {
-  const cls = status === 'NEW'     ? 'text-a-teal  border-a-teal/40  bg-a-teal/10'
-            : status === 'CHANGED' ? 'text-a-amber border-a-amber/40 bg-a-amber/10'
-                                   : 'text-a-muted border-a-border/40'
+  const cls = status === 'NEW'     ? 'bg-indigo-50 text-indigo-600 border-indigo-200'
+            : status === 'CHANGED' ? 'bg-amber-50  text-amber-600  border-amber-200'
+                                   : 'bg-gray-50   text-gray-500   border-gray-200'
   return (
-    <span className={`inline-block px-2 py-0.5 text-[10px] font-semibold border rounded uppercase tracking-wider ${cls}`}>
+    <span className={`inline-block px-2 py-0.5 text-[10px] font-semibold border rounded-full uppercase tracking-wider ${cls}`}>
       {status}
     </span>
   )
@@ -46,10 +70,42 @@ function LocationBadge({ location }: { location: string }) {
   const cfg = LOC_CONFIG[location]
   if (!cfg) return null
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold border rounded uppercase tracking-wider ${cfg.badge}`}>
-      {cfg.dot} {location}
+    <span className={`inline-flex items-center px-2 py-0.5 text-[10px] font-semibold border rounded-full uppercase tracking-wider ${cfg.badge}`}>
+      {location}
     </span>
   )
+}
+
+function DeviceTypePill({ deviceType }: { deviceType?: string | null }) {
+  if (!deviceType || deviceType === 'Unknown') return null
+  const icon = DEVICE_TYPE_ICONS[deviceType] ?? '❓'
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-50 text-gray-500 border border-gray-200 rounded-full text-[10px] font-medium mt-0.5">
+      {icon} {deviceType}
+    </span>
+  )
+}
+
+function OnlineDot({ isOnline, downtimeSince }: { isOnline?: boolean; downtimeSince?: string | null }) {
+  if (isOnline === undefined) return null
+  return isOnline
+    ? <span title="Online" className="inline-block w-2 h-2 rounded-full bg-green-500 pulse-dot align-middle mr-1.5 shrink-0" />
+    : <span title={downtimeSince ? `Offline since ${fmtDate(downtimeSince)}` : 'Offline'} className="inline-block w-2 h-2 rounded-full bg-gray-300 align-middle mr-1.5 shrink-0" />
+}
+
+function BandwidthPill({ bytesIn, bytesOut }: { bytesIn?: number; bytesOut?: number }) {
+  if (!bytesIn && !bytesOut) return <span className="text-gray-300 text-[10px]">—</span>
+  return (
+    <span className="text-[10px] text-gray-500 space-x-1.5">
+      <span className="text-indigo-500">↓{fmtBytes(bytesIn ?? 0)}</span>
+      <span>↑{fmtBytes(bytesOut ?? 0)}</span>
+    </span>
+  )
+}
+
+function fmtTick(ts: string) {
+  const d = new Date(ts)
+  return `${d.getMonth() + 1}/${d.getDate()}`
 }
 
 export default function DashboardPage() {
@@ -59,9 +115,13 @@ export default function DashboardPage() {
   const [loading,   setLoading]   = useState(true)
   const [error,     setError]     = useState('')
 
-  const [search,   setSearch]   = useState('')
-  const [osFilter, setOsFilter] = useState('')
-  const [newOnly,  setNewOnly]  = useState(false)
+  const [countHistory, setCountHistory] = useState<CountHistoryPoint[]>([])
+  const [bwTop,        setBwTop]        = useState<TopBandwidthDevice[]>([])
+  const [dnsAnomalies, setDnsAnomalies] = useState<DnsAnomaly[]>([])
+
+  const [search,    setSearch]    = useState('')
+  const [osFilter,  setOsFilter]  = useState('')
+  const [newOnly,   setNewOnly]   = useState(false)
   const [locFilter, setLocFilter] = useState<LocationFilter>(() => {
     if (typeof window !== 'undefined') {
       return (localStorage.getItem('argus_loc_filter') as LocationFilter) ?? 'all'
@@ -79,7 +139,7 @@ export default function DashboardPage() {
 
   const load = useCallback(async () => {
     try {
-      const [h, d, a] = await Promise.allSettled([getHealth(), getDevices(), getAnomalies()])
+      const [h, d, a] = await Promise.allSettled([getHealth(), getAllDevices(), getAnomalies()])
       if (h.status === 'fulfilled') setHealth(h.value)
       if (d.status === 'fulfilled') setDevices(d.value)
       if (a.status === 'fulfilled') {
@@ -93,14 +153,30 @@ export default function DashboardPage() {
     }
   }, [])
 
-  useEffect(() => { load() }, [load])
+  const loadCharts = useCallback(async () => {
+    const [ch, bw, dns] = await Promise.allSettled([
+      getCountHistory(30),
+      getBandwidthSummary(),
+      getDnsAnomalies(true, 20),
+    ])
+    if (ch.status === 'fulfilled')  setCountHistory(ch.value)
+    if (bw.status === 'fulfilled')  setBwTop(bw.value)
+    if (dns.status === 'fulfilled') setDnsAnomalies(dns.value)
+  }, [])
 
-  // Persist location filter choice
+  useEffect(() => { load() }, [load])
+  useEffect(() => { loadCharts() }, [loadCharts])
+
   useEffect(() => {
     if (typeof window !== 'undefined') {
       localStorage.setItem('argus_loc_filter', locFilter)
     }
   }, [locFilter])
+
+  useEffect(() => {
+    const id = setInterval(() => getDnsAnomalies(true, 20).then(setDnsAnomalies).catch(() => {}), 5 * 60_000)
+    return () => clearInterval(id)
+  }, [])
 
   async function handleTriggerScan() {
     setScanState('running')
@@ -121,7 +197,6 @@ export default function DashboardPage() {
     setPage(0)
   }
 
-  // Apply location filter first (before search/sort)
   const locFiltered = locFilter === 'all'
     ? devices
     : devices.filter(d => d.location === locFilter)
@@ -133,7 +208,7 @@ export default function DashboardPage() {
       const q = search.toLowerCase()
       if (q && !d.ip.includes(q) && !d.hostname.toLowerCase().includes(q) && !d.mac.toLowerCase().includes(q) && !(d.firewalla_name?.toLowerCase() ?? '').includes(q)) return false
       if (osFilter && d.os !== osFilter) return false
-      if (newOnly && d.status !== 'NEW') return false
+      if (newOnly && !d.is_new) return false
       return true
     })
     .sort((a, b) => {
@@ -149,19 +224,18 @@ export default function DashboardPage() {
   const pageSlice = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
   const openAnoms = anomalies.filter(a => !a.resolved)
   const newCount  = newThisWeek(locFiltered)
+  const onlineCount = locFiltered.filter(d => d.is_online).length
 
-  // Stats derived from the location-filtered set
   const summaryCards = [
-    { label: 'Active Devices', value: health && locFilter === 'all' ? health.device_count : locFiltered.length, icon: '🖥️',  accent: 'text-a-green' },
-    { label: 'New This Week',  value: newCount,            icon: '✨',  accent: 'text-a-teal'  },
-    { label: 'Open Anomalies', value: openAnoms.filter(a => locFilter === 'all' || locFiltered.some(d => d.ip === a.device_id)).length, icon: '⚠️', accent: openAnoms.length > 0 ? 'text-a-red' : 'text-a-green' },
-    { label: 'Last Scan', value: fmtDate(health?.last_scan?.finished_at), icon: '🔍', accent: 'text-a-muted', small: true },
+    { label: 'Active Devices', value: locFiltered.length, icon: '🖥️',  accent: 'text-indigo-600', bg: 'bg-indigo-50' },
+    { label: 'Online Now',     value: onlineCount,        icon: '🟢',  accent: 'text-green-600',  bg: 'bg-green-50'  },
+    { label: 'New (5 days)',   value: newCount,           icon: '✨',  accent: 'text-indigo-600', bg: 'bg-indigo-50' },
+    { label: 'Open Anomalies', value: openAnoms.filter(a => locFilter === 'all' || locFiltered.some(d => d.ip === a.device_id)).length, icon: '⚠️', accent: openAnoms.length > 0 ? 'text-red-600' : 'text-green-600', bg: openAnoms.length > 0 ? 'bg-red-50' : 'bg-green-50' },
   ]
 
   const SortArrow = ({ k }: { k: SortKey }) =>
-    sortKey === k ? <span className="ml-1 opacity-60">{sortDir === 'asc' ? '↑' : '↓'}</span> : null
+    sortKey === k ? <span className="ml-1 text-indigo-400">{sortDir === 'asc' ? '↑' : '↓'}</span> : null
 
-  // When "all", group devices by location for display
   const groups: Array<{ loc: string | null; rows: Device[] }> =
     locFilter !== 'all'
       ? [{ loc: null, rows: pageSlice }]
@@ -175,33 +249,50 @@ export default function DashboardPage() {
           return Object.entries(byLoc).map(([loc, rows]) => ({ loc, rows }))
         })()
 
+  const chartDates = [...new Set(countHistory.map(p => p.timestamp.slice(0, 10)))].sort()
+  const countChartData = chartDates.map(date => {
+    const row: Record<string, string | number> = { date }
+    for (const loc of ['MSP', 'PHX', 'CBN']) {
+      const pts = countHistory.filter(p => p.timestamp.slice(0, 10) === date && p.location === loc)
+      if (pts.length) {
+        row[`${loc}_total`]  = pts[pts.length - 1].device_count
+        row[`${loc}_online`] = pts[pts.length - 1].online_count
+      }
+    }
+    return row
+  })
+
   return (
-    <div className="min-h-screen bg-a-bg text-a-text font-mono">
-      <header className="sticky top-0 z-10 bg-a-surface/95 backdrop-blur border-b border-a-border px-6 py-3 flex items-center justify-between gap-4 flex-wrap">
+    <div className="min-h-screen bg-a-bg text-a-text font-sans">
+      {/* Navbar */}
+      <header className="sticky top-0 z-10 bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between gap-4 flex-wrap shadow-sm">
         <div className="flex items-center gap-3">
-          <span className="text-a-teal font-bold text-sm tracking-wide">🛡️ ARGUS</span>
-          <span className="text-a-border">|</span>
-          <span className="text-xs text-a-muted">
+          <span className="text-gray-900 font-bold text-sm tracking-tight">🛡️ Argus</span>
+          <span className="text-gray-200 select-none">|</span>
+          <span className="text-xs text-gray-500">
             {health?.status === 'ok'
-              ? <><span className="inline-block w-1.5 h-1.5 rounded-full bg-a-green mr-1.5 align-middle pulse-dot" />Online</>
+              ? <><span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 mr-1.5 align-middle pulse-dot" />Online</>
               : loading ? 'Connecting…'
-              : <><span className="inline-block w-1.5 h-1.5 rounded-full bg-a-red mr-1.5 align-middle" />Offline</>
+              : <><span className="inline-block w-1.5 h-1.5 rounded-full bg-red-400 mr-1.5 align-middle" />Offline</>
             }
           </span>
         </div>
         <div className="flex items-center gap-3">
-          <Link href="/report" className="text-xs text-a-muted hover:text-a-teal transition-colors">
-            Weekly Report →
+          <Link href="/map" className="text-xs text-gray-500 hover:text-indigo-600 transition-colors font-medium">
+            🗺️ Map
+          </Link>
+          <Link href="/report" className="text-xs text-gray-500 hover:text-indigo-600 transition-colors font-medium">
+            Report
           </Link>
           {scanMsg && (
-            <span className={`text-xs ${scanState === 'error' ? 'text-a-red' : scanState === 'done' ? 'text-a-green' : 'text-a-amber'}`}>
+            <span className={`text-xs ${scanState === 'error' ? 'text-red-500' : scanState === 'done' ? 'text-green-600' : 'text-amber-600'}`}>
               {scanMsg}
             </span>
           )}
           <button
             onClick={handleTriggerScan}
             disabled={scanState === 'running'}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-a-teal/10 hover:bg-a-teal/20 border border-a-teal/40 text-a-teal text-xs font-semibold rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {scanState === 'running'
               ? <><span className="animate-spin-fast">◌</span> Scanning…</>
@@ -214,7 +305,7 @@ export default function DashboardPage() {
       <main className="max-w-7xl mx-auto px-6 py-8">
         <ErrorBoundary label="Dashboard">
           {error && (
-            <div className="mb-6 border border-a-red/40 bg-a-red/5 text-a-red rounded px-4 py-3 text-sm">
+            <div className="mb-6 border border-red-200 bg-red-50 text-red-600 rounded-xl px-4 py-3 text-sm">
               ⚠ Could not reach Argus API: {error}
             </div>
           )}
@@ -222,30 +313,59 @@ export default function DashboardPage() {
           {/* Summary Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
             {summaryCards.map(c => (
-              <div key={c.label} className="bg-a-surface border border-a-border rounded-lg px-5 py-4">
+              <div key={c.label} className="bg-white border border-gray-200 rounded-xl px-5 py-4 shadow-card hover:shadow-card-hover transition-shadow">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-[10px] text-a-muted uppercase tracking-wider">{c.label}</span>
-                  <span className="text-base">{c.icon}</span>
+                  <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">{c.label}</span>
+                  <span className={`text-lg w-8 h-8 flex items-center justify-center rounded-lg ${c.bg}`}>{c.icon}</span>
                 </div>
-                <div className={`font-semibold ${c.small ? 'text-sm' : 'text-2xl'} ${c.accent}`}>
+                <div className={`font-bold text-2xl ${c.accent}`}>
                   {typeof c.value === 'number' ? c.value.toLocaleString() : c.value}
                 </div>
               </div>
             ))}
           </div>
 
+          {/* Device History Chart */}
+          <div className="bg-white border border-gray-200 rounded-xl p-5 mb-8 shadow-card">
+            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">📊 Device History — Last 30 Days</h2>
+            {countChartData.length < 2 ? (
+              <div className="flex items-center justify-center h-32 text-gray-400 text-sm">
+                Collecting history — check back tomorrow
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={200}>
+                <LineChart data={countChartData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
+                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#9CA3AF' }} tickFormatter={fmtTick} />
+                  <YAxis tick={{ fontSize: 9, fill: '#9CA3AF' }} />
+                  <Tooltip
+                    contentStyle={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 8, fontSize: 11 }}
+                    labelStyle={{ color: '#111827' }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 10, color: '#6B7280' }} />
+                  {(['MSP', 'PHX', 'CBN'] as const).map(loc => (
+                    <>
+                      <Line key={`${loc}_total`}  dataKey={`${loc}_total`}  name={`${loc} Total`}  stroke={LOC_CONFIG[loc].color} strokeWidth={2} dot={false} />
+                      <Line key={`${loc}_online`} dataKey={`${loc}_online`} name={`${loc} Online`} stroke={LOC_CONFIG[loc].color} strokeWidth={1.5} dot={false} strokeDasharray="4 2" />
+                    </>
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+
           {/* Open Anomalies */}
           {openAnoms.length > 0 && (
             <div className="mb-8">
-              <h2 className="text-[10px] text-a-muted uppercase tracking-wider mb-3">Open Anomalies</h2>
+              <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Open Anomalies</h2>
               <div className="space-y-2">
                 {openAnoms.slice(0, 5).map(a => (
                   <div
                     key={a.id}
-                    className={`flex items-start gap-3 border rounded px-4 py-3 text-sm ${
-                      a.severity === 'high'   ? 'border-a-red/40   bg-a-red/5   text-a-red'
-                    : a.severity === 'medium' ? 'border-a-amber/40 bg-a-amber/5 text-a-amber'
-                    :                          'border-a-border/40 bg-a-surface  text-a-muted'
+                    className={`flex items-start gap-3 border rounded-xl px-4 py-3 text-sm ${
+                      a.severity === 'high'   ? 'border-red-200   bg-red-50   text-red-700'
+                    : a.severity === 'medium' ? 'border-amber-200 bg-amber-50 text-amber-700'
+                    :                          'border-gray-200  bg-gray-50  text-gray-600'
                     }`}
                   >
                     <span className="text-base mt-0.5">
@@ -262,73 +382,139 @@ export default function DashboardPage() {
             </div>
           )}
 
+          {/* Top Bandwidth Chart */}
+          {bwTop.length > 0 && (
+            <div className="bg-white border border-gray-200 rounded-xl p-5 mb-8 shadow-card">
+              <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">📶 Top Bandwidth Users — Last 24h</h2>
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart
+                  data={bwTop.slice(0, 10).map(d => ({
+                    name: (d.device_name || d.friendly_name || d.mac).substring(0, 22),
+                    total: d.total_bytes,
+                    location: d.location,
+                  }))}
+                  layout="vertical"
+                  margin={{ top: 0, right: 20, left: 0, bottom: 0 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" horizontal={false} />
+                  <XAxis type="number" tickFormatter={v => fmtBytes(v)} tick={{ fontSize: 9, fill: '#9CA3AF' }} />
+                  <YAxis type="category" dataKey="name" width={150} tick={{ fontSize: 9, fill: '#6B7280' }} />
+                  <Tooltip
+                    formatter={(v: unknown) => fmtBytes(Number(v))}
+                    contentStyle={{ background: '#fff', border: '1px solid #E5E7EB', borderRadius: 8, fontSize: 11 }}
+                  />
+                  <Bar dataKey="total" radius={[0, 4, 4, 0]}>
+                    {bwTop.slice(0, 10).map((entry, i) => (
+                      <Cell key={i} fill={LOC_CONFIG[entry.location]?.color ?? '#9CA3AF'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* DNS Anomalies Panel */}
+          <div className="bg-white border border-gray-200 rounded-xl p-5 mb-8 shadow-card">
+            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">🔍 DNS Anomalies</h2>
+            {dnsAnomalies.length === 0 ? (
+              <div className="text-green-600 text-sm flex items-center gap-2">
+                <span>✅</span> No DNS anomalies detected
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-gray-50 border-b border-gray-100">
+                      <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Time</th>
+                      <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Device</th>
+                      <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Loc</th>
+                      <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Domain</th>
+                      <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Reason</th>
+                      <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Count</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dnsAnomalies.map(a => (
+                      <tr key={a.id} className={`border-b border-gray-50 hover:bg-gray-50 ${a.flagged ? 'bg-red-50' : ''}`}>
+                        <td className="px-3 py-2 text-gray-400 text-[10px] whitespace-nowrap font-mono">{timeAgo(a.timestamp)}</td>
+                        <td className="px-3 py-2 text-indigo-600 text-[10px] font-medium">{a.device_name || a.mac}</td>
+                        <td className="px-3 py-2">
+                          {a.location && <LocationBadge location={a.location} />}
+                        </td>
+                        <td className="px-3 py-2 text-gray-700 max-w-[200px] truncate font-mono text-[10px]">{a.domain}</td>
+                        <td className="px-3 py-2 text-amber-600 text-[10px]">{a.flag_reason || '—'}</td>
+                        <td className="px-3 py-2 text-gray-500">{a.query_count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
           {/* Filters */}
           <div className="flex flex-wrap items-center gap-3 mb-4">
-            {/* Location filter */}
-            <div className="flex items-center gap-1 bg-a-surface border border-a-border rounded-lg p-1">
+            <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-xl p-1 shadow-sm">
               {(['all', 'MSP', 'PHX', 'CBN'] as LocationFilter[]).map(loc => (
                 <button
                   key={loc}
                   onClick={() => { setLocFilter(loc); setPage(0) }}
-                  className={`px-3 py-1 text-xs font-semibold rounded transition-colors ${
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
                     locFilter === loc
-                      ? 'bg-a-teal/20 text-a-teal border border-a-teal/40'
-                      : 'text-a-muted hover:text-a-text'
+                      ? 'bg-indigo-600 text-white'
+                      : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
                   }`}
                 >
-                  {loc === 'all' ? 'All' : `${LOC_CONFIG[loc]?.dot} ${LOC_CONFIG[loc]?.btn ?? loc}`}
+                  {loc === 'all' ? 'All Locations' : LOC_CONFIG[loc]?.btn ?? loc}
                 </button>
               ))}
             </div>
 
-            {/* Search */}
             <input
               type="text"
               placeholder="Search IP, hostname, MAC…"
               value={search}
               onChange={e => { setSearch(e.target.value); setPage(0) }}
-              className="flex-1 min-w-40 bg-a-surface border border-a-border rounded px-3 py-1.5 text-xs text-a-text placeholder-a-muted focus:outline-none focus:border-a-teal"
+              className="flex-1 min-w-40 bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 shadow-sm"
             />
 
-            {/* OS filter */}
             {osList.length > 0 && (
               <select
                 value={osFilter}
                 onChange={e => { setOsFilter(e.target.value); setPage(0) }}
-                className="bg-a-surface border border-a-border rounded px-2 py-1.5 text-xs text-a-muted focus:outline-none focus:border-a-teal"
+                className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-300 shadow-sm"
               >
                 <option value="">All OS</option>
                 {osList.map(os => <option key={os} value={os}>{os}</option>)}
               </select>
             )}
 
-            {/* New only toggle */}
-            <label className="flex items-center gap-1.5 text-xs text-a-muted cursor-pointer select-none">
+            <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
               <input
                 type="checkbox"
                 checked={newOnly}
                 onChange={e => { setNewOnly(e.target.checked); setPage(0) }}
-                className="accent-a-teal"
+                className="accent-indigo-600 w-4 h-4 rounded"
               />
-              New only
+              New only (5 days)
             </label>
 
-            <span className="ml-auto text-xs text-a-muted">{filtered.length} device{filtered.length !== 1 ? 's' : ''}</span>
+            <span className="ml-auto text-sm text-gray-400">{filtered.length} device{filtered.length !== 1 ? 's' : ''}</span>
           </div>
 
           {/* Device Table */}
           {loading ? (
-            <div className="flex items-center justify-center py-16 text-a-muted text-sm">
+            <div className="flex items-center justify-center py-16 text-gray-400 text-sm">
               <span className="animate-spin-fast mr-2">◌</span>Loading…
             </div>
           ) : filtered.length === 0 ? (
-            <div className="text-center py-16 text-a-muted text-sm">
+            <div className="text-center py-16 text-gray-400 text-sm">
               No devices match the current filters.
               {locFilter !== 'all' && (
                 <div className="mt-2">
                   <button
                     onClick={() => { setLocFilter('all'); setPage(0) }}
-                    className="text-a-teal underline hover:no-underline"
+                    className="text-indigo-600 underline hover:no-underline"
                   >
                     Show all locations
                   </button>
@@ -336,29 +522,29 @@ export default function DashboardPage() {
               )}
             </div>
           ) : (
-            <div className="bg-a-surface border border-a-border rounded-lg overflow-hidden">
-              <table className="w-full text-xs">
+            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-card">
+              <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-a-border text-a-muted">
+                  <tr className="bg-gray-50 border-b border-gray-100">
                     <th
-                      className="text-left px-4 py-3 text-[10px] uppercase tracking-wider cursor-pointer hover:text-a-text select-none"
+                      className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider cursor-pointer hover:text-gray-600 select-none"
                       onClick={() => toggleSort('ip')}
                     >IP <SortArrow k="ip" /></th>
                     <th
-                      className="text-left px-4 py-3 text-[10px] uppercase tracking-wider cursor-pointer hover:text-a-text select-none"
+                      className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider cursor-pointer hover:text-gray-600 select-none"
                       onClick={() => toggleSort('hostname')}
-                    >Hostname <SortArrow k="hostname" /></th>
-                    <th className="text-left px-4 py-3 text-[10px] uppercase tracking-wider">MAC</th>
-                    <th className="text-left px-4 py-3 text-[10px] uppercase tracking-wider">Location</th>
+                    >Hostname / Name <SortArrow k="hostname" /></th>
+                    <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider hidden md:table-cell">MAC</th>
+                    <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Location</th>
                     <th
-                      className="text-left px-4 py-3 text-[10px] uppercase tracking-wider cursor-pointer hover:text-a-text select-none"
+                      className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider cursor-pointer hover:text-gray-600 select-none"
                       onClick={() => toggleSort('status')}
                     >Status <SortArrow k="status" /></th>
                     <th
-                      className="text-left px-4 py-3 text-[10px] uppercase tracking-wider cursor-pointer hover:text-a-text select-none hidden lg:table-cell"
+                      className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider cursor-pointer hover:text-gray-600 select-none hidden lg:table-cell"
                       onClick={() => toggleSort('last_seen')}
                     >Last Seen <SortArrow k="last_seen" /></th>
-                    <th className="text-left px-4 py-3 text-[10px] uppercase tracking-wider hidden xl:table-cell">Ports</th>
+                    <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider hidden xl:table-cell">Bandwidth 24h</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -366,42 +552,52 @@ export default function DashboardPage() {
                     <>
                       {loc && locFilter === 'all' && (
                         <tr key={`header-${loc}`}>
-                          <td colSpan={7} className={`px-4 py-2 text-[10px] text-a-muted uppercase tracking-widest border-b border-a-border/60 border-l-2 ${LOC_CONFIG[loc]?.border ?? 'border-l-a-border'}`}>
-                            {LOC_CONFIG[loc]?.dot ?? '📍'} {LOC_CONFIG[loc]?.label ?? loc} ({rows.length} shown)
+                          <td colSpan={7} className={`px-4 py-2 text-[10px] text-gray-500 font-semibold uppercase tracking-widest bg-gray-50 border-b border-gray-100 border-l-2 ${LOC_CONFIG[loc]?.border ?? 'border-l-gray-300'}`}>
+                            {LOC_CONFIG[loc]?.label ?? loc} <span className="font-normal text-gray-400">({rows.length} shown)</span>
                           </td>
                         </tr>
                       )}
-                      {rows.map((d, i) => (
+                      {rows.map((d) => (
                         <tr
                           key={d.mac || d.ip}
-                          className={`border-b border-a-border/40 hover:bg-a-border/20 cursor-pointer transition-colors ${i % 2 === 0 ? '' : 'bg-a-bg/30'}`}
+                          className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer transition-colors"
                           onClick={() => window.location.href = `/device?mac=${encodeURIComponent(d.mac)}`}
                         >
-                          <td className="px-4 py-3 text-a-teal font-medium">{d.ip}</td>
-                          <td className="px-4 py-3 text-a-text">
-                            {d.hostname ? d.hostname
-                             : d.firewalla_name ? (
-                                <span className="flex flex-col gap-0.5">
-                                  <span className="flex items-center gap-1">
-                                    <span className="text-[10px] font-semibold px-1 py-0.5 border rounded border-orange-400/40 bg-orange-400/10 text-orange-400 shrink-0">FW</span>
-                                    {d.firewalla_name}
-                                  </span>
-                                  {d.manufacturer && <span className="text-a-muted text-[10px]">{d.manufacturer}</span>}
-                                </span>
-                              ) : <span className="text-a-muted italic">unknown</span>
-                            }
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            <div className="flex items-center gap-1.5">
+                              <OnlineDot isOnline={d.is_online} downtimeSince={d.downtime_since} />
+                              <span className="text-indigo-600 font-mono text-xs font-medium">{d.ip}</span>
+                            </div>
                           </td>
-                          <td className="px-4 py-3 text-a-muted">{d.mac}</td>
+                          <td className="px-4 py-3 text-gray-800">
+                            <div className="font-medium flex items-center gap-1.5 flex-wrap">
+                              {d.hostname || d.firewalla_name || <span className="text-gray-400 italic text-xs">unknown</span>}
+                              {d.is_new && (
+                                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600 tracking-wide uppercase shrink-0">NEW</span>
+                              )}
+                            </div>
+                            {d.flagged_dns && (
+                              <div className="text-[10px] text-red-500 font-medium mt-0.5">⚠ DNS flag</div>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-gray-400 font-mono text-xs hidden md:table-cell">{d.mac}</td>
                           <td className="px-4 py-3">
-                            {d.location ? <LocationBadge location={d.location} /> : <span className="text-a-muted">—</span>}
+                            {d.location ? <LocationBadge location={d.location} /> : <span className="text-gray-300">—</span>}
                           </td>
-                          <td className="px-4 py-3"><StatusBadge status={d.status} /></td>
-                          <td className="px-4 py-3 text-a-muted hidden lg:table-cell">{fmtDate(d.last_seen)}</td>
-                          <td className="px-4 py-3 text-a-muted hidden xl:table-cell">
-                            {d.open_ports.length > 0
-                              ? <span className="text-a-teal">{d.open_ports.slice(0, 5).join(', ')}{d.open_ports.length > 5 ? `…+${d.open_ports.length - 5}` : ''}</span>
-                              : '—'
-                            }
+                          <td className="px-4 py-3">
+                            <div className="flex flex-col gap-0.5">
+                              <StatusBadge status={d.status} />
+                              {d.is_online === false && d.downtime_since && (
+                                <span className="text-[10px] text-gray-400">↓ {timeAgo(d.downtime_since)}</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-gray-500 text-sm hidden lg:table-cell">
+                            <div>{timeAgo(d.last_seen)}</div>
+                            <div className="text-[10px] text-gray-400">{fmtDate(d.first_seen).split(',')[0]}</div>
+                          </td>
+                          <td className="px-4 py-3 hidden xl:table-cell">
+                            <BandwidthPill bytesIn={d.bytes_in_24h} bytesOut={d.bytes_out_24h} />
                           </td>
                         </tr>
                       ))}
@@ -414,19 +610,19 @@ export default function DashboardPage() {
 
           {/* Pagination */}
           {pageCount > 1 && (
-            <div className="flex items-center justify-center gap-2 mt-4">
+            <div className="flex items-center justify-center gap-2 mt-5">
               <button
                 onClick={() => setPage(p => Math.max(0, p - 1))}
                 disabled={page === 0}
-                className="px-3 py-1 text-xs border border-a-border rounded text-a-muted hover:text-a-text disabled:opacity-30"
+                className="px-4 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-500 hover:text-gray-700 hover:border-gray-300 disabled:opacity-30 bg-white"
               >
                 ← Prev
               </button>
-              <span className="text-xs text-a-muted">{page + 1} / {pageCount}</span>
+              <span className="text-sm text-gray-400">{page + 1} / {pageCount}</span>
               <button
                 onClick={() => setPage(p => Math.min(pageCount - 1, p + 1))}
                 disabled={page === pageCount - 1}
-                className="px-3 py-1 text-xs border border-a-border rounded text-a-muted hover:text-a-text disabled:opacity-30"
+                className="px-4 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-500 hover:text-gray-700 hover:border-gray-300 disabled:opacity-30 bg-white"
               >
                 Next →
               </button>
