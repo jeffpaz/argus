@@ -3,11 +3,15 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import {
-  getLatestReport, listReports, generateReport,
+  getLatestReport, getReport, listReports, generateReport, getHealthHistory,
   fmtDate,
-  type EnhancedReport, type ReportHistoryEntry,
+  type EnhancedReport, type ReportHistoryEntry, type HealthHistoryPoint,
 } from '@/lib/argus'
 import ErrorBoundary from '@/components/ErrorBoundary'
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  ReferenceLine, ResponsiveContainer, Dot,
+} from 'recharts'
 
 function GradeBadge({ grade, score }: { grade: string; score: number }) {
   const cls =
@@ -34,19 +38,51 @@ function HistoryScore({ score, grade }: { score: number | null; grade: string | 
   return <span className={`text-xs font-bold ${color}`}>{grade} {score}</span>
 }
 
+function CustomDot(props: any) {
+  const { cx, cy, payload } = props
+  const score = payload?.health_score
+  if (score == null) return null
+  const fill = score >= 80 ? '#16A34A' : score >= 60 ? '#F59E0B' : '#DC2626'
+  return <circle cx={cx} cy={cy} r={5} fill={fill} stroke="#fff" strokeWidth={2} />
+}
+
+function CustomTooltip({ active, payload, label }: any) {
+  if (!active || !payload?.length) return null
+  const d: HealthHistoryPoint = payload[0].payload
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg shadow-lg px-3 py-2 text-xs">
+      <div className="font-semibold text-gray-900 mb-1">{label}</div>
+      <div className="flex items-center gap-2">
+        <span className="font-bold text-lg" style={{ color: d.health_score != null && d.health_score >= 80 ? '#16A34A' : d.health_score != null && d.health_score >= 60 ? '#F59E0B' : '#DC2626' }}>
+          {d.health_score ?? '—'}
+        </span>
+        {d.health_grade && <span className="text-gray-500">({d.health_grade})</span>}
+      </div>
+      <div className="text-gray-500 space-y-0.5 mt-1">
+        <div>Threats: {d.unresolved_threats}</div>
+        <div>Critical CVEs: {d.critical_cves}</div>
+        <div>New Devices: {d.new_devices}</div>
+      </div>
+    </div>
+  )
+}
+
 export default function ReportPage() {
-  const [report,      setReport]      = useState<EnhancedReport | null>(null)
-  const [history,     setHistory]     = useState<ReportHistoryEntry[]>([])
-  const [loading,     setLoading]     = useState(true)
-  const [generating,  setGenerating]  = useState(false)
-  const [error,       setError]       = useState('')
-  const [genError,    setGenError]    = useState('')
+  const [report,        setReport]        = useState<EnhancedReport | null>(null)
+  const [history,       setHistory]       = useState<ReportHistoryEntry[]>([])
+  const [healthHistory, setHealthHistory] = useState<HealthHistoryPoint[]>([])
+  const [loading,       setLoading]       = useState(true)
+  const [generating,    setGenerating]    = useState(false)
+  const [switching,     setSwitching]     = useState<string | null>(null)
+  const [error,         setError]         = useState('')
+  const [genError,      setGenError]      = useState('')
 
   useEffect(() => {
-    Promise.allSettled([getLatestReport(), listReports(20)]).then(([r, h]) => {
+    Promise.allSettled([getLatestReport(), listReports(20), getHealthHistory(12)]).then(([r, h, hh]) => {
       if (r.status === 'fulfilled') setReport(r.value)
       else setError(String(r.reason))
       if (h.status === 'fulfilled') setHistory(h.value)
+      if (hh.status === 'fulfilled') setHealthHistory(hh.value.history)
     }).finally(() => setLoading(false))
   }, [])
 
@@ -124,14 +160,26 @@ export default function ReportPage() {
                     key={h.report_date}
                     className={`px-4 py-3 cursor-pointer hover:bg-gray-50 transition-colors ${
                       report?.report_date === h.report_date ? 'bg-indigo-50 border-l-2 border-indigo-400' : ''
-                    }`}
+                    } ${switching ? 'pointer-events-none opacity-60' : ''}`}
                     onClick={async () => {
-                      if (report?.report_date === h.report_date) return
-                      const r = await getLatestReport()
-                      setReport(r)
+                      if (report?.report_date === h.report_date || switching) return
+                      setSwitching(h.report_date)
+                      setError('')
+                      try {
+                        const r = await getReport(h.report_date)
+                        setReport(r)
+                        window.scrollTo({ top: 0, behavior: 'smooth' })
+                      } catch (e) {
+                        setError(`Could not load report for ${h.report_date}: ${e}`)
+                      } finally {
+                        setSwitching(null)
+                      }
                     }}
                   >
-                    <div className="text-xs font-semibold text-gray-700">{h.report_date}</div>
+                    <div className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
+                      {h.report_date}
+                      {switching === h.report_date && <span className="animate-spin-fast text-indigo-500">◌</span>}
+                    </div>
                     <div className="mt-0.5">
                       <HistoryScore score={h.health_score} grade={h.health_grade} />
                     </div>
@@ -175,6 +223,89 @@ export default function ReportPage() {
                 >
                   {generating ? 'Generating…' : 'Generate First Report'}
                 </button>
+              </div>
+            )}
+
+            {/* ── Health Score Trend ── */}
+            {healthHistory.length >= 2 ? (
+              <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mb-6">
+                <div className="flex items-center justify-between mb-1">
+                  <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Health Score — Last 12 Weeks</h2>
+                </div>
+                {(() => {
+                  const pts = [...healthHistory].filter(h => h.health_score != null)
+                  const current = pts.at(-1)?.health_score ?? null
+                  const fourWkAgo = pts.length >= 4 ? pts[pts.length - 4]?.health_score ?? null : null
+                  const avg4 = pts.length >= 4
+                    ? Math.round(pts.slice(-4).reduce((s, p) => s + (p.health_score ?? 0), 0) / 4)
+                    : null
+                  const trendDiff = current != null && fourWkAgo != null ? current - fourWkAgo : null
+                  const trendArrow =
+                    trendDiff == null ? '→' :
+                    trendDiff > 2 ? '↗' :
+                    trendDiff < -2 ? '↘' : '→'
+                  const trendColor =
+                    trendDiff == null ? 'text-gray-400' :
+                    trendDiff > 2 ? 'text-green-600' :
+                    trendDiff < -2 ? 'text-red-600' : 'text-gray-400'
+                  return (
+                    <>
+                      <ResponsiveContainer width="100%" height={180}>
+                        <LineChart data={healthHistory} margin={{ top: 8, right: 12, left: -10, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
+                          <XAxis
+                            dataKey="week"
+                            tick={{ fontSize: 10, fill: '#9CA3AF' }}
+                            tickFormatter={w => {
+                              const d = new Date(w + 'T12:00:00Z')
+                              return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                            }}
+                          />
+                          <YAxis domain={[0, 100]} tick={{ fontSize: 10, fill: '#9CA3AF' }} />
+                          <Tooltip content={<CustomTooltip />} />
+                          <ReferenceLine y={80} stroke="#D1D5DB" strokeDasharray="4 4" />
+                          <ReferenceLine y={60} stroke="#D1D5DB" strokeDasharray="4 4" />
+                          <Line
+                            type="monotone"
+                            dataKey="health_score"
+                            stroke="#6366F1"
+                            strokeWidth={2}
+                            dot={<CustomDot />}
+                            activeDot={{ r: 6 }}
+                            connectNulls
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                      <div className="flex items-center gap-6 mt-3 text-xs text-gray-600 border-t border-gray-100 pt-3">
+                        <div>
+                          <span className="text-gray-400">Current:</span>{' '}
+                          <span className="font-bold text-gray-900">{current ?? '—'}</span>
+                          {healthHistory.at(-1)?.health_grade && (
+                            <span className="text-gray-500 ml-1">({healthHistory.at(-1)!.health_grade})</span>
+                          )}
+                        </div>
+                        {avg4 != null && (
+                          <div>
+                            <span className="text-gray-400">4-week avg:</span>{' '}
+                            <span className="font-semibold text-gray-800">{avg4}</span>
+                          </div>
+                        )}
+                        {trendDiff != null && (
+                          <div>
+                            <span className="text-gray-400">Trend:</span>{' '}
+                            <span className={`font-bold ${trendColor}`}>
+                              {trendArrow} {trendDiff > 0 ? '+' : ''}{trendDiff}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )
+                })()}
+              </div>
+            ) : !loading && (
+              <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 mb-6 text-center text-sm text-gray-500">
+                📊 Trend will appear after 2+ weekly reports have been generated. Check back next Sunday.
               </div>
             )}
 

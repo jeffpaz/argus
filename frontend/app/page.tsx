@@ -6,7 +6,7 @@ import Link from 'next/link'
 import {
   getHealth, getIdentities, getAnomalies, triggerScan,
   getBandwidthSummary, getDnsAnomalies, getThreats, resolveThreat,
-  getLifecycleSummary, getLatestReport, getOpenOutages,
+  getLifecycleSummary, getLatestReport, getOpenOutages, getIncidentCount,
   fmtDate, fmtBytes, timeAgo,
   type HealthStatus, type DeviceIdentity, type Anomaly,
   type TopBandwidthDevice, type DnsAnomaly, type Threat,
@@ -174,12 +174,14 @@ export default function DashboardPage() {
   const [loading,   setLoading]   = useState(true)
   const [error,     setError]     = useState('')
 
-  const [bwTop,        setBwTop]        = useState<TopBandwidthDevice[]>([])
-  const [dnsAnomalies, setDnsAnomalies] = useState<DnsAnomaly[]>([])
-  const [threats, setThreats] = useState<Threat[]>([])
-  const [lifecycle, setLifecycle] = useState<LifecycleSummary | null>(null)
-  const [healthReport, setHealthReport] = useState<EnhancedReport | null>(null)
-  const [openOutages,  setOpenOutages]  = useState<OutageEvent[]>([])
+  const [bwTop,          setBwTop]          = useState<TopBandwidthDevice[]>([])
+  const [dnsAnomalies,   setDnsAnomalies]   = useState<DnsAnomaly[]>([])
+  const [threats,        setThreats]        = useState<Threat[]>([])
+  const [lifecycle,      setLifecycle]      = useState<LifecycleSummary | null>(null)
+  const [healthReport,   setHealthReport]   = useState<EnhancedReport | null>(null)
+  const [openOutages,    setOpenOutages]    = useState<OutageEvent[]>([])
+  const [incidentCount,  setIncidentCount]  = useState<number | null>(null)
+  const [loadingCharts,  setLoadingCharts]  = useState(true)
   const [lcFilter, setLcFilter] = useState<LifecycleFilter>('all')
 
   const [search,    setSearch]    = useState('')
@@ -217,18 +219,24 @@ export default function DashboardPage() {
   }, [])
 
   const loadCharts = useCallback(async () => {
-    const [bw, dns, lc, rpt, out] = await Promise.allSettled([
-      getBandwidthSummary(),
-      getDnsAnomalies(true, 20),
-      getLifecycleSummary(),
-      getLatestReport(),
-      getOpenOutages(),
-    ])
-    if (bw.status === 'fulfilled')  setBwTop(bw.value)
-    if (dns.status === 'fulfilled') setDnsAnomalies(dns.value)
-    if (lc.status === 'fulfilled')  setLifecycle(lc.value)
-    if (rpt.status === 'fulfilled') setHealthReport(rpt.value)
-    if (out.status === 'fulfilled') setOpenOutages(out.value)
+    try {
+      const [bw, dns, lc, rpt, out, inc] = await Promise.allSettled([
+        getBandwidthSummary(),
+        getDnsAnomalies(true, 20),
+        getLifecycleSummary(),
+        getLatestReport(),
+        getOpenOutages(),
+        getIncidentCount(),
+      ])
+      if (bw.status === 'fulfilled')  setBwTop(bw.value)
+      if (dns.status === 'fulfilled') setDnsAnomalies(dns.value)
+      if (lc.status === 'fulfilled')  setLifecycle(lc.value)
+      if (rpt.status === 'fulfilled') setHealthReport(rpt.value)
+      if (out.status === 'fulfilled') setOpenOutages(out.value)
+      if (inc.status === 'fulfilled') setIncidentCount(inc.value.count)
+    } finally {
+      setLoadingCharts(false)
+    }
   }, [])
 
   useEffect(() => { load() }, [load])
@@ -345,12 +353,12 @@ export default function DashboardPage() {
     : hs.health_grade === 'C' ? 'bg-yellow-50'
     : hs.health_grade === 'D' ? 'bg-orange-50'
     : 'bg-red-50'
-  const activeThreatsCount = threats.length + openAnoms.filter(a => locFilter === 'all' || locFiltered.some(d => d.ip === a.device_id)).length + openOutages.length
+  const activeThreatsCount = incidentCount ?? (threats.length + openAnoms.filter(a => locFilter === 'all' || locFiltered.some(d => d.ip === a.device_id)).length + openOutages.length)
   const summaryCards = [
     { label: 'Active Devices', value: locFiltered.length, icon: '🖥️',  accent: 'text-indigo-600', bg: 'bg-indigo-50', sub: lifecycle ? `${lifecycle.active} active · ${lifecycle.idle} idle · ${lifecycle.stale} stale` : null, onClick: undefined as (() => void) | undefined },
     { label: 'Online Now',     value: onlineCount,        icon: '🟢',  accent: 'text-green-600',  bg: 'bg-green-50', sub: null, onClick: undefined },
     { label: 'Guest Devices',  value: guestCount,         icon: '👥',  accent: 'text-purple-600', bg: 'bg-purple-50', sub: null, onClick: () => router.push('/guests') },
-    { label: 'Active Threats', value: activeThreatsCount, icon: '⚠️', accent: activeThreatsCount > 0 ? 'text-red-600' : 'text-green-600', bg: activeThreatsCount > 0 ? 'bg-red-50' : 'bg-green-50', sub: null, onClick: () => router.push('/alerts') },
+    { label: 'Open Incidents', value: activeThreatsCount, icon: '⚠️', accent: activeThreatsCount > 0 ? 'text-red-600' : 'text-green-600', bg: activeThreatsCount > 0 ? 'bg-red-50' : 'bg-green-50', sub: incidentCount != null ? 'open + monitoring' : null, onClick: () => router.push('/alerts') },
     { label: 'Health Score',   value: hs ? `${hs.health_grade} ${hs.health_score}` : '—', icon: '🛡️', accent: hsColor, bg: hsBg, sub: hs ? `Week of ${hs.week}` : null, onClick: () => router.push('/report') },
   ]
 
@@ -463,16 +471,27 @@ export default function DashboardPage() {
               <div
                 key={c.label}
                 onClick={c.onClick}
-                className={`bg-white border border-gray-200 rounded-xl px-5 py-4 shadow-card hover:shadow-card-hover transition-shadow ${c.onClick ? 'cursor-pointer' : ''}`}
+                className={`bg-white border border-gray-200 rounded-xl px-5 py-4 shadow-card hover:shadow-card-hover transition-shadow min-h-[112px] ${c.onClick ? 'cursor-pointer' : ''}`}
               >
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[10px] text-gray-400 font-medium uppercase tracking-wider">{c.label}</span>
                   <span className={`text-lg w-8 h-8 flex items-center justify-center rounded-lg ${c.bg}`}>{c.icon}</span>
                 </div>
-                <div className={`font-bold text-2xl ${c.accent}`}>
-                  {typeof c.value === 'number' ? c.value.toLocaleString() : c.value}
-                </div>
-                {c.sub && <div className="text-[10px] text-gray-400 mt-1">{c.sub}</div>}
+                {loading || loadingCharts ? (
+                  <div className="animate-pulse space-y-1.5 mt-0.5">
+                    <div className="h-8 w-14 bg-gray-200 rounded" />
+                    <div className="h-3 w-28 bg-gray-100 rounded" />
+                  </div>
+                ) : (
+                  <>
+                    <div className={`font-bold text-2xl ${c.accent}`}>
+                      {typeof c.value === 'number' ? c.value.toLocaleString() : c.value}
+                    </div>
+                    <div className="text-[10px] text-gray-400 mt-1 min-h-[1rem]">
+                      {c.sub}
+                    </div>
+                  </>
+                )}
               </div>
             ))}
           </div>
@@ -506,56 +525,64 @@ export default function DashboardPage() {
           )}
 
           {/* Top Bandwidth Chart */}
-          {bwTop.length > 0 && (
-            <div className="bg-white border border-gray-200 rounded-xl p-5 mb-8 shadow-card">
-              <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">📶 Top Bandwidth Users — Last 24h</h2>
-              <ResponsiveContainer width="100%" height={Math.max(220, bwTop.slice(0, 10).length * 28)}>
-                <BarChart
-                  data={bwTop.slice(0, 10).map(d => ({
-                    name:      (d.device_name || d.friendly_name || d.mac).substring(0, 24),
-                    total_in:  d.total_in,
-                    total_out: d.total_out,
-                    location:  d.location,
-                    label:     d.device_name || d.friendly_name || d.mac,
-                    mac:       d.mac,
-                  }))}
-                  layout="vertical"
-                  margin={{ top: 0, right: 20, left: 0, bottom: 0 }}
-                  style={{ cursor: 'pointer' }}
-                  onClick={(data: Record<string, unknown>) => {
-                    const payload = (data?.activePayload as Array<{payload?: {mac?: string; identity_id?: string}}>)?.[0]?.payload
-                    if (payload?.identity_id) router.push(`/device?identity_id=${encodeURIComponent(payload.identity_id)}`)
-                    else if (payload?.mac) router.push(`/device?mac=${encodeURIComponent(payload.mac)}`)
-                  }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" horizontal={false} />
-                  <XAxis type="number" tickFormatter={v => fmtBytes(v)} tick={{ fontSize: 9, fill: '#9CA3AF' }} />
-                  <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 9, fill: '#6B7280' }} />
-                  <Tooltip content={<BwTooltip />} />
-                  <Bar dataKey="total_in" stackId="a" radius={[0, 0, 0, 0]}>
-                    {bwTop.slice(0, 10).map((entry, i) => (
-                      <Cell key={i} fill={BW_COLORS[entry.location]?.dl ?? BW_COLORS[''].dl} />
-                    ))}
-                  </Bar>
-                  <Bar dataKey="total_out" stackId="a" radius={[0, 4, 4, 0]}>
-                    {bwTop.slice(0, 10).map((entry, i) => (
-                      <Cell key={i} fill={BW_COLORS[entry.location]?.ul ?? BW_COLORS[''].ul} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-              <div className="flex flex-wrap gap-x-5 gap-y-1.5 mt-3 pl-1">
-                <span className="text-[11px] text-gray-400 font-medium self-center">Download / Upload</span>
-                {(['MSP', 'PHX', 'CBN'] as const).map(loc => (
-                  <div key={loc} className="flex items-center gap-2">
-                    <span className="inline-block w-3 h-2.5 rounded-sm shrink-0" style={{ background: BW_COLORS[loc].dl }} />
-                    <span className="inline-block w-3 h-2.5 rounded-sm shrink-0" style={{ background: BW_COLORS[loc].ul }} />
-                    <span className="text-[12px] text-gray-500">{loc}</span>
-                  </div>
+          <div className="bg-white border border-gray-200 rounded-xl p-5 mb-8 shadow-card">
+            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">📶 Top Bandwidth Users — Last 24h</h2>
+            {loadingCharts ? (
+              <div className="animate-pulse space-y-2" style={{ height: 280 }}>
+                {[85, 60, 75, 90, 50, 70, 45, 80, 55, 65].map((w, i) => (
+                  <div key={i} className="h-6 bg-gray-100 rounded" style={{ width: `${w}%` }} />
                 ))}
               </div>
-            </div>
-          )}
+            ) : bwTop.length > 0 ? (
+              <>
+                <ResponsiveContainer width="100%" height={Math.max(280, bwTop.slice(0, 10).length * 28)}>
+                  <BarChart
+                    data={bwTop.slice(0, 10).map(d => ({
+                      name:      (d.device_name || d.friendly_name || d.mac).substring(0, 24),
+                      total_in:  d.total_in,
+                      total_out: d.total_out,
+                      location:  d.location,
+                      label:     d.device_name || d.friendly_name || d.mac,
+                      mac:       d.mac,
+                    }))}
+                    layout="vertical"
+                    margin={{ top: 0, right: 20, left: 0, bottom: 0 }}
+                    style={{ cursor: 'pointer' }}
+                    onClick={(data: Record<string, unknown>) => {
+                      const payload = (data?.activePayload as Array<{payload?: {mac?: string; identity_id?: string}}>)?.[0]?.payload
+                      if (payload?.identity_id) router.push(`/device?identity_id=${encodeURIComponent(payload.identity_id)}`)
+                      else if (payload?.mac) router.push(`/device?mac=${encodeURIComponent(payload.mac)}`)
+                    }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" horizontal={false} />
+                    <XAxis type="number" tickFormatter={v => fmtBytes(v)} tick={{ fontSize: 9, fill: '#9CA3AF' }} />
+                    <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 9, fill: '#6B7280' }} />
+                    <Tooltip content={<BwTooltip />} />
+                    <Bar dataKey="total_in" stackId="a" radius={[0, 0, 0, 0]}>
+                      {bwTop.slice(0, 10).map((entry, i) => (
+                        <Cell key={i} fill={BW_COLORS[entry.location]?.dl ?? BW_COLORS[''].dl} />
+                      ))}
+                    </Bar>
+                    <Bar dataKey="total_out" stackId="a" radius={[0, 4, 4, 0]}>
+                      {bwTop.slice(0, 10).map((entry, i) => (
+                        <Cell key={i} fill={BW_COLORS[entry.location]?.ul ?? BW_COLORS[''].ul} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+                <div className="flex flex-wrap gap-x-5 gap-y-1.5 mt-3 pl-1">
+                  <span className="text-[11px] text-gray-400 font-medium self-center">Download / Upload</span>
+                  {(['MSP', 'PHX', 'CBN'] as const).map(loc => (
+                    <div key={loc} className="flex items-center gap-2">
+                      <span className="inline-block w-3 h-2.5 rounded-sm shrink-0" style={{ background: BW_COLORS[loc].dl }} />
+                      <span className="inline-block w-3 h-2.5 rounded-sm shrink-0" style={{ background: BW_COLORS[loc].ul }} />
+                      <span className="text-[12px] text-gray-500">{loc}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : null}
+          </div>
 
 
           {/* Active Threats Panel */}

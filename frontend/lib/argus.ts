@@ -303,8 +303,6 @@ export interface AlertHistoryEntry {
   location:     string | null
   trigger_type: string
   detail:       string | null
-  ntfy_topic:   string
-  ntfy_status:  number
   fired_at:     string
 }
 
@@ -422,6 +420,13 @@ export async function getDeviceDnsAnomalies(mac: string, limit = 20): Promise<Dn
   return data.anomalies
 }
 
+export async function getIdentityDnsAnomalies(identityId: string, limit = 20): Promise<DnsAnomaly[]> {
+  const data = await argusGet<{ count: number; anomalies: DnsAnomaly[] }>(
+    `/identities/${encodeURIComponent(identityId)}/dns-anomalies?limit=${limit}`
+  )
+  return data.anomalies
+}
+
 export async function getDeviceBandwidthHistory(mac: string, hours = 48): Promise<DeviceBandwidthPoint[]> {
   const data = await argusGet<{ mac: string; hours: number; history: DeviceBandwidthPoint[] }>(
     `/network/bandwidth/device?mac=${encodeURIComponent(mac)}&hours=${hours}`
@@ -490,8 +495,44 @@ export const createAlertRule   = (body: Partial<AlertRule>) => argusPost<AlertRu
 export const updateAlertRule   = (id: number, body: Partial<AlertRule>) =>
   argusPost<AlertRule>(`/alerts/rules/${id}`, body, 'PATCH')
 export const deleteAlertRule   = (id: number) => argusPost<{ status: string }>(`/alerts/rules/${id}`, undefined, 'DELETE')
-export const testAlertRule     = (id: number) => argusPost<{ status: string; ntfy_status: number }>(`/alerts/test/${id}`)
 export const evaluateRules     = () => argusPost<{ alerts_fired: number }>('/alerts/evaluate')
+
+export interface AlertMute {
+  id:                number
+  device_identifier: string
+  alert_type:        string
+  reason:            string | null
+  created_at:        string
+  expires_at:        string | null
+}
+
+export interface GroupedAlert {
+  group_key:         string
+  trigger_type:      string
+  identity_id:       string | null
+  device_identifier: string
+  device_name:       string | null
+  location:          string | null
+  rule_name:         string
+  count:             number
+  first_seen:        string
+  last_seen:         string
+  alerts:            AlertHistoryEntry[]
+}
+
+export const getAlertMutes    = () => argusGet<AlertMute[]>('/alerts/mutes')
+export const createAlertMute  = (body: {
+  device_identifier: string
+  alert_type: string
+  reason?: string
+  expires_at?: string | null
+}) => argusPost<AlertMute>('/alerts/mutes', body)
+export const deleteAlertMute  = (id: number) => argusPost<{ status: string }>(`/alerts/mutes/${id}`, undefined, 'DELETE')
+export const getGroupedAlerts = (hours = 24, location?: string, limit = 100) => {
+  const qs = new URLSearchParams({ hours: String(hours), limit: String(limit) })
+  if (location) qs.set('location', location)
+  return argusGet<GroupedAlert[]>(`/alerts/grouped?${qs}`)
+}
 
 // ─── Lifecycle types ─────────────────────────────────────────────────────────
 
@@ -879,6 +920,74 @@ export async function listReports(limit = 20): Promise<ReportHistoryEntry[]> {
   return argusGet<ReportHistoryEntry[]>(`/reports/history?limit=${limit}`)
 }
 
+export async function getReport(reportDate: string): Promise<EnhancedReport> {
+  return argusGet<EnhancedReport>(`/reports/${encodeURIComponent(reportDate)}`)
+}
+
 export async function generateReport(): Promise<{ status: string; report_date: string; summary: EnhancedReportSummary }> {
   return argusPost('/reports/generate')
+}
+
+// ── Session 10: Incidents ─────────────────────────────────────────────────────
+
+export interface Incident {
+  id:              number
+  identity_id:     string
+  title:           string
+  severity:        'low' | 'medium' | 'high' | 'critical'
+  status:          'open' | 'monitoring' | 'resolved'
+  threat_count:    number
+  first_threat_at: string | null
+  last_threat_at:  string | null
+  created_at:      string
+  resolved_at:     string | null
+  resolved_note:   string | null
+  summary:         string | null
+  display_name:    string | null
+  location:        string | null
+}
+
+export interface IncidentTimeline {
+  id:          number
+  threat_type: string
+  severity:    string
+  detail:      string | null
+  timestamp:   string
+  dst_ip:      string | null
+  dst_port:    number | null
+}
+
+export interface IncidentDetail extends Incident {
+  timeline: IncidentTimeline[]
+}
+
+export interface HealthHistoryPoint {
+  week:               string
+  health_score:       number | null
+  health_grade:       string | null
+  unresolved_threats: number
+  critical_cves:      number
+  new_devices:        number
+}
+
+export async function getIncidents(status?: string, limit = 50): Promise<Incident[]> {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (status) params.set('status', status)
+  return argusGet<Incident[]>(`/incidents?${params}`)
+}
+
+export async function getIncidentDetail(id: number): Promise<IncidentDetail> {
+  return argusGet<IncidentDetail>(`/incidents/${id}`)
+}
+
+export async function updateIncident(id: number, body: { status?: string; resolved_note?: string }): Promise<Incident> {
+  return argusPost<Incident>(`/incidents/${id}`, body, 'PATCH')
+}
+
+export async function getIncidentCount(): Promise<{ count: number }> {
+  return argusGet<{ count: number }>('/incidents/count')
+}
+
+export async function getHealthHistory(weeks = 12): Promise<{ history: HealthHistoryPoint[] }> {
+  return argusGet<{ history: HealthHistoryPoint[] }>(`/reports/health-history?weeks=${weeks}`)
 }

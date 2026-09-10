@@ -1,16 +1,19 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { Fragment, useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import {
-  getAlertRules, getAlertHistory, createAlertRule, updateAlertRule,
-  deleteAlertRule, testAlertRule, evaluateRules,
+  getAlertRules, createAlertRule, updateAlertRule,
+  deleteAlertRule, evaluateRules,
   getCveSummary, getCveMatches, resolveCve, triggerCveScan,
   getThreats, getOutageHistory, getVlanRecommendations, updateVlanRecommendation,
   runVlanAnalysis, getSslIssues, triggerSslScan,
+  getGroupedAlerts, getAlertMutes, createAlertMute, deleteAlertMute,
+  getIncidents, getIncidentDetail, updateIncident,
   fmtDate, timeAgo,
   type AlertRule, type AlertHistoryEntry, type CveSummary, type CveMatch,
   type Threat, type OutageEvent, type VlanRecommendation, type SslIssue,
+  type AlertMute, type GroupedAlert, type Incident, type IncidentDetail,
 } from '@/lib/argus'
 
 const TRIGGER_LABELS: Record<string, string> = {
@@ -24,19 +27,18 @@ const TRIGGER_LABELS: Record<string, string> = {
   scan_complete:  'Scan Complete',
 }
 
+const LOCATION_COLORS: Record<string, string> = {
+  MSP: 'bg-blue-100 text-blue-700 border border-blue-200',
+  PHX: 'bg-orange-100 text-orange-700 border border-orange-200',
+  CBN: 'bg-green-100 text-green-700 border border-green-200',
+}
+
 const SEVERITY_OPTIONS = ['low', 'medium', 'high', 'critical']
 const THREAT_TYPE_OPTIONS = [
   'malicious_ip', 'port_scan', 'cleartext',
   'unusual_hours', 'rogue_dhcp', 'internal_scan', 'dns_anomaly',
 ]
 const PRIORITY_OPTIONS = ['min', 'low', 'default', 'high', 'urgent']
-const PRIORITY_COLORS: Record<string, string> = {
-  min: 'bg-gray-100 text-gray-500',
-  low: 'bg-blue-50 text-blue-500',
-  default: 'bg-gray-100 text-gray-600',
-  high: 'bg-amber-50 text-amber-600',
-  urgent: 'bg-red-50 text-red-600',
-}
 
 const BLANK_RULE: Partial<AlertRule> = {
   name: '',
@@ -55,6 +57,17 @@ const BLANK_RULE: Partial<AlertRule> = {
   ntfy_priority: 'default',
   ntfy_tags: 'shield',
   cooldown_minutes: 60,
+}
+
+function LocationBadge({ location }: { location: string | null | undefined }) {
+  if (!location) return <span className="text-gray-400">—</span>
+  return (
+    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+      LOCATION_COLORS[location] ?? 'bg-gray-100 text-gray-600'
+    }`}>
+      {location}
+    </span>
+  )
 }
 
 function RuleBadge({ label, value }: { label: string; value: string | null | undefined }) {
@@ -88,18 +101,57 @@ const SEV_BADGE: Record<string, string> = {
   low:      'bg-gray-400 text-white',
 }
 
+interface MuteTarget {
+  device_identifier: string
+  device_name: string
+  trigger_type: string
+  mute_all?: boolean
+}
+
+const INCIDENT_STATUS_FILTER_DEFAULT = 'open,monitoring'
+
+const SEV_BORDER: Record<string, string> = {
+  critical: 'border-l-[#DC2626]',
+  high:     'border-l-[#EF4444]',
+  medium:   'border-l-[#F59E0B]',
+  low:      'border-l-[#6B7280]',
+}
+
+const THREAT_TYPE_LABELS: Record<string, string> = {
+  malicious_ip:   'Malicious IP Contact',
+  port_scan:      'Port Scan',
+  cleartext:      'Cleartext Protocol',
+  unusual_hours:  'Unusual Hours',
+  ssl_cert_change:'Certificate Change',
+  ssl_expired:    'Expired Certificate',
+  ssl_self_signed:'Self-Signed Cert',
+  dns_anomaly:    'DNS Anomaly',
+  vulnerability:  'Vulnerability',
+  rogue_dhcp:     'Rogue DHCP',
+}
+
+const SEV_DOT: Record<string, string> = {
+  critical: 'bg-red-600',
+  high:     'bg-red-400',
+  medium:   'bg-amber-400',
+  low:      'bg-gray-400',
+}
+
 export default function AlertsPage() {
   const [rules, setRules] = useState<AlertRule[]>([])
-  const [history, setHistory] = useState<AlertHistoryEntry[]>([])
+  const [grouped, setGrouped] = useState<GroupedAlert[]>([])
+  const [mutes, setMutes] = useState<AlertMute[]>([])
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [editRule, setEditRule] = useState<Partial<AlertRule> | null>(null)
   const [editMode, setEditMode] = useState<'create' | 'edit'>('create')
-  const [testStatus, setTestStatus] = useState<Record<number, string>>({})
   const [saving, setSaving] = useState(false)
   const [cveSummary, setCveSummary] = useState<CveSummary | null>(null)
   const [cves, setCves] = useState<CveMatch[]>([])
   const [cveFilter, setCveFilter] = useState<string>('all')
   const [cveScanning, setCveScanning] = useState(false)
+  const [showResolvedCves, setShowResolvedCves] = useState(false)
+  const [resolvedCves, setResolvedCves] = useState<CveMatch[]>([])
   const [cleartextThreats, setCleartextThreats] = useState<Threat[]>([])
   const [sslIssues, setSslIssues] = useState<SslIssue[]>([])
   const [sslScanning, setSslScanning] = useState(false)
@@ -107,23 +159,48 @@ export default function AlertsPage() {
   const [vlanRecs, setVlanRecs] = useState<VlanRecommendation[]>([])
   const [vlanAnalyzing, setVlanAnalyzing] = useState(false)
 
+  // Incidents state
+  const [incidents, setIncidents] = useState<Incident[]>([])
+  const [incidentFilter, setIncidentFilter] = useState<'all' | 'open' | 'monitoring' | 'resolved'>('open')
+  const [expandedIncidents, setExpandedIncidents] = useState<Set<number>>(new Set())
+  const [incidentTimelines, setIncidentTimelines] = useState<Record<number, IncidentDetail>>({})
+  const [resolveTarget, setResolveTarget] = useState<Incident | null>(null)
+  const [resolveNote, setResolveNote] = useState('')
+  const [resolvingSaving, setResolvingSaving] = useState(false)
+
+  // Mute modal state
+  const [muteTarget, setMuteTarget] = useState<MuteTarget | null>(null)
+  const [muteAll, setMuteAll] = useState(false)
+  const [muteReason, setMuteReason] = useState('')
+  const [muteExpiry, setMuteExpiry] = useState<'permanent' | '24h' | '7d' | '30d'>('permanent')
+  const [muteSaving, setMuteSaving] = useState(false)
+
+  const loadIncidents = useCallback(async (filter: string) => {
+    const statusParam = filter === 'all' ? undefined : filter === 'open' ? 'open,monitoring' : filter
+    const data = await getIncidents(statusParam, 50).catch(() => [] as Incident[])
+    setIncidents(data)
+  }, [])
+
   const load = useCallback(async () => {
-    const [r, h, cs, cm, ct, ssl, outg, vlan] = await Promise.allSettled([
-      getAlertRules(), getAlertHistory(50),
+    const [r, g, m, cs, cm, ct, ssl, outg, vlan, inc] = await Promise.allSettled([
+      getAlertRules(), getGroupedAlerts(24), getAlertMutes(),
       getCveSummary(), getCveMatches({ resolved: false, limit: 100 }),
       getThreats(false, 100),
       getSslIssues(),
       getOutageHistory(30),
       getVlanRecommendations(undefined, 'open'),
+      getIncidents('open,monitoring', 50),
     ])
     if (r.status === 'fulfilled') setRules(r.value)
-    if (h.status === 'fulfilled') setHistory(h.value)
+    if (g.status === 'fulfilled') setGrouped(g.value)
+    if (m.status === 'fulfilled') setMutes(m.value)
     if (cs.status === 'fulfilled') setCveSummary(cs.value)
     if (cm.status === 'fulfilled') setCves(cm.value)
     if (ct.status === 'fulfilled') setCleartextThreats(ct.value.filter(t => t.threat_type === 'cleartext'))
     if (ssl.status === 'fulfilled') setSslIssues(ssl.value)
     if (outg.status === 'fulfilled') setOutages(outg.value)
     if (vlan.status === 'fulfilled') setVlanRecs(vlan.value)
+    if (inc.status === 'fulfilled') setIncidents(inc.value)
     setLoading(false)
   }, [])
 
@@ -131,22 +208,65 @@ export default function AlertsPage() {
 
   useEffect(() => {
     const id = setInterval(() => {
-      getAlertHistory(50).then(setHistory).catch(() => {})
+      getGroupedAlerts(24).then(setGrouped).catch(() => {})
+      getAlertMutes().then(setMutes).catch(() => {})
     }, 60_000)
     return () => clearInterval(id)
   }, [])
 
+  function toggleExpand(key: string) {
+    setExpandedKeys(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  function openMute(target: MuteTarget) {
+    setMuteTarget(target)
+    setMuteAll(target.mute_all ?? false)
+    setMuteReason('')
+    setMuteExpiry('permanent')
+  }
+
+  function calcExpiresAt(expiry: 'permanent' | '24h' | '7d' | '30d'): string | null {
+    if (expiry === 'permanent') return null
+    const now = new Date()
+    if (expiry === '24h') now.setHours(now.getHours() + 24)
+    else if (expiry === '7d') now.setDate(now.getDate() + 7)
+    else if (expiry === '30d') now.setDate(now.getDate() + 30)
+    return now.toISOString().replace('T', ' ').slice(0, 19)
+  }
+
+  async function handleMuteConfirm() {
+    if (!muteTarget) return
+    setMuteSaving(true)
+    try {
+      await createAlertMute({
+        device_identifier: muteTarget.device_identifier,
+        alert_type: muteAll ? '*' : muteTarget.trigger_type,
+        reason: muteReason || undefined,
+        expires_at: calcExpiresAt(muteExpiry),
+      })
+      const updated = await getAlertMutes()
+      setMutes(updated)
+      setMuteTarget(null)
+    } catch (e) {
+      alert(`Mute failed: ${e}`)
+    } finally {
+      setMuteSaving(false)
+    }
+  }
+
+  async function handleRemoveMute(id: number) {
+    await deleteAlertMute(id)
+    setMutes(prev => prev.filter(m => m.id !== id))
+  }
+
   async function handleToggle(rule: AlertRule) {
     const updated = await updateAlertRule(rule.id, { enabled: !rule.enabled })
     setRules(prev => prev.map(r => r.id === rule.id ? { ...r, ...updated } : r))
-  }
-
-  async function handleTest(rule: AlertRule) {
-    setTestStatus(prev => ({ ...prev, [rule.id]: 'sending' }))
-    const res = await testAlertRule(rule.id)
-    const status = res.ntfy_status === 200 ? 'sent' : 'failed'
-    setTestStatus(prev => ({ ...prev, [rule.id]: status }))
-    setTimeout(() => setTestStatus(prev => { const n = { ...prev }; delete n[rule.id]; return n }), 3000)
   }
 
   async function handleDelete(rule: AlertRule) {
@@ -215,6 +335,50 @@ export default function AlertsPage() {
     }
   }
 
+  async function handleIncidentFilterChange(f: 'all' | 'open' | 'monitoring' | 'resolved') {
+    setIncidentFilter(f)
+    const statusParam = f === 'all' ? undefined : f === 'open' ? 'open,monitoring' : f
+    const data = await getIncidents(statusParam, 50).catch(() => [] as Incident[])
+    setIncidents(data)
+  }
+
+  async function toggleIncidentTimeline(incident: Incident) {
+    const next = new Set(expandedIncidents)
+    if (next.has(incident.id)) {
+      next.delete(incident.id)
+    } else {
+      next.add(incident.id)
+      if (!incidentTimelines[incident.id]) {
+        const detail = await getIncidentDetail(incident.id).catch(() => null)
+        if (detail) setIncidentTimelines(prev => ({ ...prev, [incident.id]: detail }))
+      }
+    }
+    setExpandedIncidents(next)
+  }
+
+  async function handleResolveConfirm() {
+    if (!resolveTarget) return
+    setResolvingSaving(true)
+    try {
+      await updateIncident(resolveTarget.id, { status: 'resolved', resolved_note: resolveNote || undefined })
+      setIncidents(prev => prev.filter(i => incidentFilter === 'all' ? true : i.id !== resolveTarget.id))
+      setResolveTarget(null)
+      setResolveNote('')
+    } catch (e) {
+      alert(`Failed to resolve: ${e}`)
+    } finally {
+      setResolvingSaving(false)
+    }
+  }
+
+  async function handleShowResolvedCves(show: boolean) {
+    setShowResolvedCves(show)
+    if (show && resolvedCves.length === 0) {
+      const all = await getCveMatches({ resolved: true, limit: 100 }).catch(() => [] as CveMatch[])
+      setResolvedCves(all)
+    }
+  }
+
   async function handleSave() {
     if (!editRule) return
     setSaving(true)
@@ -237,6 +401,9 @@ export default function AlertsPage() {
   const thresholdGB = editRule?.threshold_bytes
     ? (editRule.threshold_bytes / 1_073_741_824).toFixed(1)
     : ''
+
+  // Total alert count across all groups
+  const totalAlerts = grouped.reduce((sum, g) => sum + g.count, 0)
 
   if (loading) {
     return (
@@ -266,19 +433,146 @@ export default function AlertsPage() {
 
       <main className="max-w-5xl mx-auto px-6 py-8">
 
-        {/* Alert History */}
+        {/* ── INCIDENTS ───────────────────────────────────────────────────── */}
+        <div className="bg-white border border-gray-200 rounded-xl p-5 mb-8 shadow-card">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+              Incidents
+              {incidents.filter(i => i.status !== 'resolved').length > 0 && (
+                <span className="px-1.5 py-0.5 bg-red-50 text-red-600 rounded text-[10px]">
+                  {incidents.filter(i => i.status !== 'resolved').length}
+                </span>
+              )}
+            </h2>
+            <div className="flex gap-1">
+              {(['open', 'monitoring', 'resolved', 'all'] as const).map(f => (
+                <button
+                  key={f}
+                  onClick={() => handleIncidentFilterChange(f)}
+                  className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${
+                    incidentFilter === f
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  {f === 'open' ? 'Open' : f === 'monitoring' ? 'Monitoring' : f === 'resolved' ? 'Resolved' : 'All'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {incidents.length === 0 ? (
+            <div className="text-green-600 text-sm flex items-center gap-2">
+              <span>✅</span> No incidents
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {incidents.map(inc => {
+                const isExpanded = expandedIncidents.has(inc.id)
+                const timeline = incidentTimelines[inc.id]?.timeline ?? []
+                const statusDot =
+                  inc.status === 'open' ? 'bg-red-500' :
+                  inc.status === 'monitoring' ? 'bg-amber-400' : 'bg-green-500'
+                const statusLabel =
+                  inc.status === 'open' ? 'OPEN' :
+                  inc.status === 'monitoring' ? 'MONITORING' : 'RESOLVED'
+                return (
+                  <div
+                    key={inc.id}
+                    className={`border-l-4 border border-gray-200 rounded-xl p-4 ${SEV_BORDER[inc.severity] ?? 'border-l-gray-300'} ${
+                      inc.status === 'resolved' ? 'opacity-60' : ''
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${SEV_BADGE[inc.severity] ?? 'bg-gray-100 text-gray-600'}`}>
+                            {inc.severity}
+                          </span>
+                          <span className="font-semibold text-sm text-gray-900 truncate">{inc.title}</span>
+                        </div>
+                        <div className="text-[11px] text-gray-500 flex items-center gap-2 flex-wrap">
+                          {inc.location && <LocationBadge location={inc.location} />}
+                          <span>{inc.threat_count} alert{inc.threat_count !== 1 ? 's' : ''}</span>
+                          {inc.first_threat_at && <span>· Started {timeAgo(inc.first_threat_at)}</span>}
+                          {inc.last_threat_at && <span>· Last: {timeAgo(inc.last_threat_at)}</span>}
+                        </div>
+                        {inc.summary && (
+                          <p className="text-xs text-gray-600 mt-2 leading-relaxed">{inc.summary}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="flex items-center gap-1 text-[10px] font-semibold text-gray-500">
+                          <span className={`w-1.5 h-1.5 rounded-full ${statusDot}`} />
+                          {statusLabel}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Timeline */}
+                    {isExpanded && (
+                      <div className="mt-4 pl-2 border-l-2 border-gray-100 ml-1">
+                        {timeline.length === 0 ? (
+                          <div className="text-gray-400 text-xs py-2">Loading timeline…</div>
+                        ) : (
+                          <div className="space-y-2">
+                            {timeline.map(t => (
+                              <div key={t.id} className="flex items-start gap-2 text-xs">
+                                <span className={`w-2 h-2 rounded-full mt-0.5 shrink-0 ${SEV_DOT[t.severity] ?? 'bg-gray-400'}`} />
+                                <div>
+                                  <span className="text-gray-400 font-mono mr-2">
+                                    {t.timestamp ? new Date(t.timestamp + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                                  </span>
+                                  <span className="font-medium text-gray-700">
+                                    {THREAT_TYPE_LABELS[t.threat_type] ?? t.threat_type}
+                                  </span>
+                                  {t.detail && (
+                                    <span className="text-gray-500 ml-2 truncate max-w-xs inline-block align-bottom">{t.detail}</span>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        onClick={() => toggleIncidentTimeline(inc)}
+                        className="px-2.5 py-1 text-[11px] border border-gray-200 rounded-lg hover:bg-indigo-50 hover:text-indigo-600 text-gray-500 transition-colors"
+                      >
+                        {isExpanded ? 'Hide Timeline' : 'View Timeline'}
+                      </button>
+                      {inc.status !== 'resolved' && (
+                        <button
+                          onClick={() => { setResolveTarget(inc); setResolveNote('') }}
+                          className="px-2.5 py-1 text-[11px] border border-gray-200 rounded-lg hover:bg-green-50 hover:text-green-600 text-gray-500 transition-colors"
+                        >
+                          Mark Resolved
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* ── Alert History (grouped) ─────────────────────────────────────── */}
         <div className="bg-white border border-gray-200 rounded-xl p-5 mb-8 shadow-card">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-              Recent Alerts
-              {history.length > 0 && (
+              Recent Alerts (24h)
+              {totalAlerts > 0 && (
                 <span className="ml-2 px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded text-[10px]">
-                  {history.length}
+                  {totalAlerts}
                 </span>
               )}
             </h2>
           </div>
-          {history.length === 0 ? (
+          {grouped.length === 0 ? (
             <div className="text-green-600 text-sm flex items-center gap-2">
               <span>✅</span> No alerts fired yet
             </div>
@@ -287,39 +581,152 @@ export default function AlertsPage() {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="bg-gray-50 border-b border-gray-100">
+                    <th className="w-6 px-2 py-2" />
                     <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Time</th>
                     <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Rule</th>
                     <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Device</th>
                     <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Location</th>
                     <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Type</th>
-                    <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Status</th>
+                    <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {history.map(h => (
-                    <tr key={h.id} className="border-b border-gray-50 hover:bg-gray-50">
-                      <td className="px-3 py-2 text-gray-400 text-[10px] whitespace-nowrap font-mono">{timeAgo(h.fired_at)}</td>
-                      <td className="px-3 py-2 text-indigo-600 text-[10px] font-medium">{h.rule_name}</td>
-                      <td className="px-3 py-2 text-gray-700 text-[10px]">{h.device_name || '—'}</td>
-                      <td className="px-3 py-2 text-[10px]">
-                        {h.location && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-600">{h.location}</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-gray-500 text-[10px]">{TRIGGER_LABELS[h.trigger_type] ?? h.trigger_type}</td>
+                  {grouped.map(g => {
+                    const isExpanded = expandedKeys.has(g.group_key)
+                    const isGrouped = g.count > 1
+                    return (
+                      <Fragment key={g.group_key}>
+                        {/* Parent row */}
+                        <tr
+                          className={`border-b border-gray-50 hover:bg-gray-50 transition-colors ${isGrouped ? 'cursor-pointer' : ''}`}
+                          onClick={isGrouped ? () => toggleExpand(g.group_key) : undefined}
+                        >
+                          <td className="px-2 py-2 text-gray-400 text-[11px] w-6">
+                            {isGrouped && (
+                              <span className="transition-transform inline-block select-none">
+                                {isExpanded ? '▼' : '▶'}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-gray-400 text-[10px] whitespace-nowrap font-mono">
+                            {timeAgo(g.last_seen)}
+                          </td>
+                          <td className="px-3 py-2 text-indigo-600 text-[10px] font-medium">{g.rule_name}</td>
+                          <td className="px-3 py-2 text-gray-700 text-[10px]">{g.device_name || '—'}</td>
+                          <td className="px-3 py-2 text-[10px]">
+                            <LocationBadge location={g.location} />
+                          </td>
+                          <td className="px-3 py-2 text-gray-500 text-[10px]">
+                            {TRIGGER_LABELS[g.trigger_type] ?? g.trigger_type}
+                            {isGrouped && (
+                              <span className="ml-2 px-1.5 py-0.5 rounded text-xs font-semibold bg-gray-100 text-gray-600">
+                                ×{g.count}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2" onClick={e => e.stopPropagation()}>
+                            <button
+                              title="Mute alerts for this device"
+                              onClick={() => openMute({
+                                device_identifier: g.device_identifier,
+                                device_name: g.device_name || g.device_identifier,
+                                trigger_type: g.trigger_type,
+                              })}
+                              className="px-1.5 py-1 text-[11px] border border-gray-200 rounded hover:bg-amber-50 hover:text-amber-600 text-gray-400 transition-colors"
+                            >
+                              🔇
+                            </button>
+                          </td>
+                        </tr>
+
+                        {/* Expanded sub-rows */}
+                        {isGrouped && isExpanded && g.alerts.map(a => (
+                          <tr key={a.id} className="border-b border-gray-50 bg-gray-50/60">
+                            <td className="w-6" />
+                            <td className="px-3 py-1.5 pl-8 text-gray-400 text-[10px] whitespace-nowrap font-mono">
+                              {timeAgo(a.fired_at)}
+                            </td>
+                            <td className="px-3 py-1.5 text-indigo-500 text-[10px]">{a.rule_name}</td>
+                            <td className="px-3 py-1.5 text-gray-600 text-[10px]">{a.device_name || '—'}</td>
+                            <td className="px-3 py-1.5 text-[10px]">
+                              <LocationBadge location={a.location} />
+                            </td>
+                            <td className="px-3 py-1.5 text-gray-500 text-[10px]">
+                              {TRIGGER_LABELS[a.trigger_type] ?? a.trigger_type}
+                            </td>
+                            <td className="px-3 py-1.5">
+                              <button
+                                title="Mute this alert type for this device"
+                                onClick={() => openMute({
+                                  device_identifier: g.device_identifier,
+                                  device_name: a.device_name || g.device_identifier,
+                                  trigger_type: a.trigger_type,
+                                })}
+                                className="px-1.5 py-0.5 text-[10px] border border-gray-200 rounded hover:bg-amber-50 hover:text-amber-600 text-gray-400 transition-colors"
+                              >
+                                🔇
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </Fragment>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* ── Active Mutes ────────────────────────────────────────────────── */}
+        {mutes.length > 0 && (
+          <div className="bg-white border border-amber-200 rounded-xl p-5 mb-8 shadow-card">
+            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">
+              🔇 Muted Devices
+              <span className="ml-2 px-1.5 py-0.5 bg-amber-50 text-amber-600 rounded text-[10px]">
+                {mutes.length}
+              </span>
+            </h2>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-100">
+                    <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Device</th>
+                    <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Alert Type</th>
+                    <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Reason</th>
+                    <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Expires</th>
+                    <th className="text-left px-3 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Remove</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {mutes.map(m => (
+                    <tr key={m.id} className="border-b border-gray-50 hover:bg-gray-50">
+                      <td className="px-3 py-2 text-gray-700 font-mono text-[10px]">{m.device_identifier}</td>
                       <td className="px-3 py-2">
-                        {h.ntfy_status === 200
-                          ? <span className="text-green-600 text-[10px] font-medium">✅ Sent</span>
-                          : <span className="text-red-500 text-[10px] font-medium">❌ Failed ({h.ntfy_status})</span>
+                        {m.alert_type === '*'
+                          ? <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-semibold">All alerts</span>
+                          : <span className="px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded text-[10px] font-medium">{TRIGGER_LABELS[m.alert_type] ?? m.alert_type}</span>
                         }
+                      </td>
+                      <td className="px-3 py-2 text-gray-500 text-[10px] max-w-xs truncate">{m.reason || '—'}</td>
+                      <td className="px-3 py-2 text-gray-400 text-[10px]">
+                        {m.expires_at ? fmtDate(m.expires_at) : <span className="text-gray-500">Permanent</span>}
+                      </td>
+                      <td className="px-3 py-2">
+                        <button
+                          onClick={() => handleRemoveMute(m.id)}
+                          className="px-2 py-1 text-[11px] border border-gray-200 rounded hover:bg-red-50 hover:text-red-500 text-gray-400 transition-colors"
+                        >
+                          Remove
+                        </button>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Alert Rules */}
         <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-card">
@@ -338,8 +745,7 @@ export default function AlertsPage() {
               <div className="text-gray-400 text-sm text-center py-8">No alert rules configured.</div>
             )}
             {rules.map(rule => {
-              const ts = testStatus[rule.id]
-              const lastFired = history.find(h => h.rule_id === rule.id)?.fired_at
+              const lastFired = grouped.find(g => g.rule_name === rule.name)?.last_seen
               return (
                 <div
                   key={rule.id}
@@ -358,12 +764,6 @@ export default function AlertsPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
-                      <button
-                        onClick={() => handleTest(rule)}
-                        className="px-2 py-1 text-[11px] border border-gray-200 rounded hover:bg-indigo-50 hover:text-indigo-600 text-gray-500 transition-colors"
-                      >
-                        {ts === 'sending' ? '…' : ts === 'sent' ? '✅ Sent' : ts === 'failed' ? '❌ Failed' : 'Test'}
-                      </button>
                       <button
                         onClick={() => openEdit(rule)}
                         className="px-2 py-1 text-[11px] border border-gray-200 rounded hover:bg-gray-50 text-gray-500 transition-colors"
@@ -390,9 +790,6 @@ export default function AlertsPage() {
                     {rule.threshold_bytes && (
                       <RuleBadge label="threshold" value={`${(rule.threshold_bytes / 1_073_741_824).toFixed(1)} GB`} />
                     )}
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${PRIORITY_COLORS[rule.ntfy_priority] || 'bg-gray-100 text-gray-600'}`}>
-                      {rule.ntfy_priority}
-                    </span>
                     <span className="text-[10px] text-gray-400">cooldown {rule.cooldown_minutes}m</span>
                     {lastFired && (
                       <span className="text-[10px] text-gray-400 ml-auto">last fired {timeAgo(lastFired)}</span>
@@ -407,13 +804,23 @@ export default function AlertsPage() {
         {/* Vulnerabilities */}
         <div className="bg-white border border-gray-200 rounded-xl p-5 mt-8 shadow-card">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
               Vulnerabilities (CVE)
               {cveSummary && cveSummary.total_unresolved > 0 && (
                 <span className="ml-2 px-1.5 py-0.5 bg-red-50 text-red-600 rounded text-[10px]">
                   {cveSummary.total_unresolved} unresolved
                 </span>
               )}
+              <button
+                onClick={() => handleShowResolvedCves(!showResolvedCves)}
+                className={`ml-2 px-2 py-0.5 rounded text-[10px] font-medium border transition-colors ${
+                  showResolvedCves
+                    ? 'bg-gray-800 text-white border-gray-800'
+                    : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
+                }`}
+              >
+                {showResolvedCves ? 'Hide Resolved' : 'Show Resolved'}
+              </button>
             </h2>
             <button
               onClick={handleCveScan}
@@ -426,7 +833,6 @@ export default function AlertsPage() {
             </button>
           </div>
 
-          {/* Summary pills */}
           {cveSummary && (
             <div className="flex flex-wrap items-center gap-2 mb-4">
               {(['all', 'critical', 'high', 'medium', 'low'] as const).map(sev => {
@@ -466,7 +872,7 @@ export default function AlertsPage() {
             </div>
           )}
 
-          {filteredCves.length === 0 ? (
+          {filteredCves.length === 0 && !showResolvedCves ? (
             <div className="text-green-600 text-sm flex items-center gap-2 py-4">
               <span>✅</span>
               {cves.length === 0 ? 'No vulnerabilities detected. Run a scan to check.' : 'No CVEs match the selected filter.'}
@@ -496,7 +902,9 @@ export default function AlertsPage() {
                           {cve.device_name}
                         </Link>
                         {cve.location && (
-                          <span className="ml-1.5 px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded text-[10px] font-semibold">{cve.location}</span>
+                          <span className="ml-1.5">
+                            <LocationBadge location={cve.location} />
+                          </span>
                         )}
                       </td>
                       <td className="px-3 py-2 text-gray-600">
@@ -536,14 +944,53 @@ export default function AlertsPage() {
                       </td>
                     </tr>
                   ))}
+                  {showResolvedCves && resolvedCves.map(cve => (
+                    <tr key={`resolved-${cve.id}`} className="border-b border-gray-50 bg-gray-50/50 opacity-70">
+                      <td className="px-3 py-2">
+                        <Link
+                          href={`/device?identity_id=${encodeURIComponent(cve.identity_id)}`}
+                          className="text-indigo-600 font-medium hover:underline"
+                        >
+                          {cve.device_name}
+                        </Link>
+                        {cve.location && (
+                          <span className="ml-1.5">
+                            <LocationBadge location={cve.location} />
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-gray-500">{cve.service}{cve.port ? `:${cve.port}` : ''}</td>
+                      <td className="px-3 py-2">
+                        <span className="font-mono text-[11px] text-gray-500">{cve.cve_id}</span>
+                      </td>
+                      <td className="px-3 py-2 text-gray-500">{cve.cvss_score?.toFixed(1)}</td>
+                      <td className="px-3 py-2">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase bg-gray-100 text-gray-500">
+                          {cve.severity}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-gray-400 text-[10px] font-mono">
+                        {cve.published_date ? cve.published_date.slice(0, 10) : '—'}
+                      </td>
+                      <td className="px-3 py-2">
+                        {(cve as any).resolved_note?.includes('Auto-resolved') ? (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ background: '#F0FDF4', color: '#16A34A' }}>
+                            🔄 Auto-patched
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-gray-400">Resolved</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
           )}
         </div>
 
-        {/* ── F1a: Cleartext Protocol Usage ───────────────────────────────── */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm mb-6">
+        {/* ── Cleartext Protocol Usage ─────────────────────────────────────── */}
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm mb-6 mt-8">
           <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="text-sm font-semibold text-gray-800">🔓 Cleartext Protocol Usage</span>
@@ -570,7 +1017,7 @@ export default function AlertsPage() {
                   {cleartextThreats.map(t => (
                     <tr key={t.id} className="border-b border-gray-50 hover:bg-gray-50">
                       <td className="px-3 py-2 font-medium text-gray-800">{t.device_name || t.src_ip || '—'}</td>
-                      <td className="px-3 py-2 text-gray-500">{t.location || '—'}</td>
+                      <td className="px-3 py-2"><LocationBadge location={t.location} /></td>
                       <td className="px-3 py-2">
                         <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 rounded text-[10px] font-semibold uppercase">
                           {t.detail.match(/using (\w+)/)?.[1] ?? 'cleartext'}
@@ -586,7 +1033,7 @@ export default function AlertsPage() {
           )}
         </div>
 
-        {/* ── F1b: SSL/TLS Issues ─────────────────────────────────────────── */}
+        {/* ── SSL/TLS Issues ───────────────────────────────────────────────── */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm mb-6">
           <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -629,7 +1076,7 @@ export default function AlertsPage() {
                     return (
                       <tr key={s.id} className="border-b border-gray-50 hover:bg-gray-50">
                         <td className="px-3 py-2 font-medium text-gray-800">{s.display_name || '—'}</td>
-                        <td className="px-3 py-2 text-gray-500">{s.location || '—'}</td>
+                        <td className="px-3 py-2"><LocationBadge location={s.location} /></td>
                         <td className="px-3 py-2">
                           <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${issueColors[s.threat_type] || 'bg-gray-100 text-gray-600'}`}>
                             {s.threat_type.replace('ssl_', '').replace('_', ' ')}
@@ -646,7 +1093,7 @@ export default function AlertsPage() {
           )}
         </div>
 
-        {/* ── F1c: Network Outages ────────────────────────────────────────── */}
+        {/* ── Network Outages ──────────────────────────────────────────────── */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm mb-6">
           <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -696,7 +1143,7 @@ export default function AlertsPage() {
           )}
         </div>
 
-        {/* ── F1d: VLAN Recommendations ───────────────────────────────────── */}
+        {/* ── VLAN Recommendations ─────────────────────────────────────────── */}
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm mb-6">
           <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -731,7 +1178,7 @@ export default function AlertsPage() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="font-semibold text-sm text-gray-900">{rec.recommendation}</span>
-                          <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px] font-semibold">{rec.location}</span>
+                          <LocationBadge location={rec.location} />
                           <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
                             rec.priority === 'high' ? 'bg-red-100 text-red-700' :
                             rec.priority === 'medium' ? 'bg-amber-100 text-amber-700' :
@@ -767,7 +1214,133 @@ export default function AlertsPage() {
 
       </main>
 
-      {/* Add/Edit Rule Modal */}
+      {/* ── Resolve Incident Modal ───────────────────────────────────────────── */}
+      {resolveTarget && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+            <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-gray-100">
+              <h3 className="font-semibold text-gray-900 text-sm">✅ Resolve Incident</h3>
+              <button onClick={() => setResolveTarget(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <p className="text-xs text-gray-500">
+                Incident: <span className="font-medium text-gray-800">{resolveTarget.title}</span>
+              </p>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Resolution note (optional)</label>
+                <input
+                  type="text"
+                  value={resolveNote}
+                  onChange={e => setResolveNote(e.target.value)}
+                  placeholder="e.g. False positive, firewall rule added"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-green-300"
+                />
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-gray-100">
+              <button onClick={() => setResolveTarget(null)} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors">
+                Cancel
+              </button>
+              <button
+                onClick={handleResolveConfirm}
+                disabled={resolvingSaving}
+                className="px-5 py-2 bg-green-600 text-white text-sm font-semibold rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
+              >
+                {resolvingSaving ? 'Resolving…' : 'Mark Resolved'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Mute Modal ───────────────────────────────────────────────────────── */}
+      {muteTarget && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
+            <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-gray-100">
+              <h3 className="font-semibold text-gray-900 text-sm">🔇 Mute Alerts</h3>
+              <button onClick={() => setMuteTarget(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+            </div>
+
+            <div className="px-5 py-4 space-y-4">
+              <div className="text-xs text-gray-500">
+                Device: <span className="font-medium text-gray-800">{muteTarget.device_name}</span>
+              </div>
+
+              {/* Scope */}
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-gray-500">Scope</label>
+                <button
+                  onClick={() => setMuteAll(false)}
+                  className={`w-full text-left px-3 py-2 rounded-lg border text-xs transition-colors ${
+                    !muteAll ? 'border-indigo-400 bg-indigo-50 text-indigo-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  Mute <strong>{TRIGGER_LABELS[muteTarget.trigger_type] ?? muteTarget.trigger_type}</strong> for this device
+                </button>
+                <button
+                  onClick={() => setMuteAll(true)}
+                  className={`w-full text-left px-3 py-2 rounded-lg border text-xs transition-colors ${
+                    muteAll ? 'border-indigo-400 bg-indigo-50 text-indigo-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  Mute <strong>all alerts</strong> for this device
+                </button>
+              </div>
+
+              {/* Reason */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Reason (optional)</label>
+                <input
+                  type="text"
+                  value={muteReason}
+                  onChange={e => setMuteReason(e.target.value)}
+                  placeholder="e.g. TV phones home, expected"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                />
+              </div>
+
+              {/* Expiry */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Duration</label>
+                <div className="flex gap-2 flex-wrap">
+                  {(['permanent', '24h', '7d', '30d'] as const).map(opt => (
+                    <button
+                      key={opt}
+                      onClick={() => setMuteExpiry(opt)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                        muteExpiry === opt
+                          ? 'bg-indigo-600 text-white border-indigo-600'
+                          : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                      }`}
+                    >
+                      {opt === 'permanent' ? 'Permanent' : opt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-gray-100">
+              <button
+                onClick={() => setMuteTarget(null)}
+                className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleMuteConfirm}
+                disabled={muteSaving}
+                className="px-5 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+              >
+                {muteSaving ? 'Muting…' : 'Confirm Mute'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Add/Edit Rule Modal ───────────────────────────────────────────── */}
       {editRule && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
@@ -779,7 +1352,6 @@ export default function AlertsPage() {
             </div>
 
             <div className="px-6 py-5 space-y-4">
-              {/* Name */}
               <div>
                 <label className="block text-xs font-semibold text-gray-500 mb-1">Name *</label>
                 <input
@@ -790,7 +1362,6 @@ export default function AlertsPage() {
                 />
               </div>
 
-              {/* Description */}
               <div>
                 <label className="block text-xs font-semibold text-gray-500 mb-1">Description</label>
                 <input
@@ -801,7 +1372,6 @@ export default function AlertsPage() {
                 />
               </div>
 
-              {/* Trigger type */}
               <div>
                 <label className="block text-xs font-semibold text-gray-500 mb-1">Trigger Type *</label>
                 <select
@@ -815,7 +1385,6 @@ export default function AlertsPage() {
                 </select>
               </div>
 
-              {/* Threat-specific filters */}
               {editRule.trigger_type === 'threat' && (
                 <>
                   <div className="grid grid-cols-2 gap-3">
@@ -845,7 +1414,6 @@ export default function AlertsPage() {
                 </>
               )}
 
-              {/* Bandwidth threshold */}
               {editRule.trigger_type === 'bandwidth' && (
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 mb-1">Threshold (GB per day)</label>
@@ -864,7 +1432,6 @@ export default function AlertsPage() {
                 </div>
               )}
 
-              {/* Location filter */}
               <div>
                 <label className="block text-xs font-semibold text-gray-500 mb-1">Location Filter</label>
                 <select
@@ -879,7 +1446,6 @@ export default function AlertsPage() {
                 </select>
               </div>
 
-              {/* NTFY settings */}
               <div className="border-t border-gray-100 pt-4">
                 <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">NTFY Settings</div>
                 <div className="space-y-3">
@@ -926,7 +1492,6 @@ export default function AlertsPage() {
                 </div>
               </div>
 
-              {/* Active hours */}
               <div>
                 <label className="block text-xs font-semibold text-gray-500 mb-1">Active Hours (UTC, optional)</label>
                 <div className="flex items-center gap-2">
@@ -959,7 +1524,7 @@ export default function AlertsPage() {
               </button>
               <button
                 onClick={handleSave}
-                disabled={saving || !editRule.name || !editRule.ntfy_topic}
+                disabled={saving || !editRule.name}
                 className="px-5 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
               >
                 {saving ? 'Saving…' : 'Save Rule'}
