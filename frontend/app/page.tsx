@@ -353,12 +353,17 @@ export default function DashboardPage() {
     : hs.health_grade === 'C' ? 'bg-yellow-50'
     : hs.health_grade === 'D' ? 'bg-orange-50'
     : 'bg-red-50'
-  const activeThreatsCount = incidentCount ?? (threats.length + openAnoms.filter(a => locFilter === 'all' || locFiltered.some(d => d.ip === a.device_id)).length + openOutages.length)
+  // incidentCount === null means "still loading" (masked by the loadingCharts
+  // skeleton below) OR "getIncidentCount() failed" — those used to be treated
+  // the same as "no data yet" and silently backfilled with a differently
+  // -defined number (raw threats+anomalies+outages, not incident-based/deduped)
+  // under the same "Open Incidents" label. Show an explicit unavailable state
+  // instead so a fetch failure can't masquerade as a real incident count.
   const summaryCards = [
     { label: 'Active Devices', value: locFiltered.length, icon: '🖥️',  accent: 'text-indigo-600', bg: 'bg-indigo-50', sub: lifecycle ? `${lifecycle.active} active · ${lifecycle.idle} idle · ${lifecycle.stale} stale` : null, onClick: undefined as (() => void) | undefined },
     { label: 'Online Now',     value: onlineCount,        icon: '🟢',  accent: 'text-green-600',  bg: 'bg-green-50', sub: null, onClick: undefined },
     { label: 'Guest Devices',  value: guestCount,         icon: '👥',  accent: 'text-purple-600', bg: 'bg-purple-50', sub: null, onClick: () => router.push('/guests') },
-    { label: 'Open Incidents', value: activeThreatsCount, icon: '⚠️', accent: activeThreatsCount > 0 ? 'text-red-600' : 'text-green-600', bg: activeThreatsCount > 0 ? 'bg-red-50' : 'bg-green-50', sub: incidentCount != null ? 'open + monitoring' : null, onClick: () => router.push('/alerts') },
+    { label: 'Open Incidents', value: incidentCount ?? '—', icon: '⚠️', accent: incidentCount == null ? 'text-gray-400' : incidentCount > 0 ? 'text-red-600' : 'text-green-600', bg: incidentCount == null ? 'bg-gray-50' : incidentCount > 0 ? 'bg-red-50' : 'bg-green-50', sub: incidentCount != null ? 'open + monitoring' : 'unavailable', onClick: () => router.push('/alerts') },
     { label: 'Health Score',   value: hs ? `${hs.health_grade} ${hs.health_score}` : '—', icon: '🛡️', accent: hsColor, bg: hsBg, sub: hs ? `Week of ${hs.week}` : null, onClick: () => router.push('/report') },
   ]
 

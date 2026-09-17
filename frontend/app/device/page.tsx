@@ -202,13 +202,17 @@ function DeviceContent() {
         getDeviceCves(identityId),
         getIdentityDnsAnomalies(identityId, 50),
       ]).then(([d, bw, u, lc, cv, dns]) => {
+        // Chained (not fire-and-forget) so `finally` below waits for it too —
+        // otherwise the loading spinner clears before Port History/Anomaly
+        // Log actually have data, and they briefly render empty.
+        let portAnomalyPromise: Promise<void> | undefined
         if (d.status === 'fulfilled') {
           setDevice(d.value)
           setMacHistory(d.value.mac_history ?? [])
           // Fetch port history + anomalies using current MAC
           const currentMac = d.value.current_mac ?? ''
           if (currentMac) {
-            Promise.allSettled([
+            portAnomalyPromise = Promise.allSettled([
               getDevicePortHistory(currentMac),
               getDeviceAnomalies(currentMac),
             ]).then(([h, a]) => {
@@ -224,6 +228,7 @@ function DeviceContent() {
         if (lc.status === 'fulfilled')  setLcEvents(lc.value)
         if (cv.status === 'fulfilled')  setCves(cv.value)
         if (dns.status === 'fulfilled') setDnsAnomalies(dns.value)
+        return portAnomalyPromise
       }).finally(() => setLoading(false))
     } else {
       // Legacy MAC-based fetch

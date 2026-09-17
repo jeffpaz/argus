@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useState, useEffect, useCallback, useRef } from 'react'
+import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import {
   getAlertRules, createAlertRule, updateAlertRule,
@@ -8,7 +8,7 @@ import {
   getCveSummary, getCveMatches, resolveCve, triggerCveScan,
   getThreats, getOutageHistory, getVlanRecommendations, updateVlanRecommendation,
   runVlanAnalysis, getSslIssues, triggerSslScan,
-  getGroupedAlerts, getAlertMutes, createAlertMute, deleteAlertMute,
+  getGroupedAlerts, getAlertHistory, getAlertMutes, createAlertMute, deleteAlertMute,
   getIncidents, getIncidentDetail, updateIncident,
   fmtDate, timeAgo,
   type AlertRule, type AlertHistoryEntry, type CveSummary, type CveMatch,
@@ -140,6 +140,11 @@ const SEV_DOT: Record<string, string> = {
 export default function AlertsPage() {
   const [rules, setRules] = useState<AlertRule[]>([])
   const [grouped, setGrouped] = useState<GroupedAlert[]>([])
+  // Unbounded (unlike `grouped`, windowed to 24h) and keyed by rule_id, not
+  // rule_name — used only for "last fired" on the Alert Rules panel, so a
+  // rule that hasn't fired in the last 24h still shows its true last-fired
+  // time, and two rules sharing a name don't show each other's timestamp.
+  const [ruleHistory, setRuleHistory] = useState<AlertHistoryEntry[]>([])
   const [mutes, setMutes] = useState<AlertMute[]>([])
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
@@ -161,6 +166,7 @@ export default function AlertsPage() {
 
   // Incidents state
   const [incidents, setIncidents] = useState<Incident[]>([])
+  const openIncidentCount = useMemo(() => incidents.filter(i => i.status !== 'resolved').length, [incidents])
   const [incidentFilter, setIncidentFilter] = useState<'all' | 'open' | 'monitoring' | 'resolved'>('open')
   const [expandedIncidents, setExpandedIncidents] = useState<Set<number>>(new Set())
   const [incidentTimelines, setIncidentTimelines] = useState<Record<number, IncidentDetail>>({})
@@ -182,8 +188,8 @@ export default function AlertsPage() {
   }, [])
 
   const load = useCallback(async () => {
-    const [r, g, m, cs, cm, ct, ssl, outg, vlan, inc] = await Promise.allSettled([
-      getAlertRules(), getGroupedAlerts(24), getAlertMutes(),
+    const [r, g, rh, m, cs, cm, ct, ssl, outg, vlan, inc] = await Promise.allSettled([
+      getAlertRules(), getGroupedAlerts(24), getAlertHistory(50), getAlertMutes(),
       getCveSummary(), getCveMatches({ resolved: false, limit: 100 }),
       getThreats(false, 100),
       getSslIssues(),
@@ -193,6 +199,7 @@ export default function AlertsPage() {
     ])
     if (r.status === 'fulfilled') setRules(r.value)
     if (g.status === 'fulfilled') setGrouped(g.value)
+    if (rh.status === 'fulfilled') setRuleHistory(rh.value)
     if (m.status === 'fulfilled') setMutes(m.value)
     if (cs.status === 'fulfilled') setCveSummary(cs.value)
     if (cm.status === 'fulfilled') setCves(cm.value)
@@ -361,7 +368,9 @@ export default function AlertsPage() {
     setResolvingSaving(true)
     try {
       await updateIncident(resolveTarget.id, { status: 'resolved', resolved_note: resolveNote || undefined })
-      setIncidents(prev => prev.filter(i => incidentFilter === 'all' ? true : i.id !== resolveTarget.id))
+      setIncidents(prev => incidentFilter === 'all'
+        ? prev.map(i => i.id === resolveTarget.id ? { ...i, status: 'resolved' } : i)
+        : prev.filter(i => i.id !== resolveTarget.id))
       setResolveTarget(null)
       setResolveNote('')
     } catch (e) {
@@ -438,9 +447,9 @@ export default function AlertsPage() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
               Incidents
-              {incidents.filter(i => i.status !== 'resolved').length > 0 && (
+              {openIncidentCount > 0 && (
                 <span className="px-1.5 py-0.5 bg-red-50 text-red-600 rounded text-[10px]">
-                  {incidents.filter(i => i.status !== 'resolved').length}
+                  {openIncidentCount}
                 </span>
               )}
             </h2>
@@ -745,7 +754,7 @@ export default function AlertsPage() {
               <div className="text-gray-400 text-sm text-center py-8">No alert rules configured.</div>
             )}
             {rules.map(rule => {
-              const lastFired = grouped.find(g => g.rule_name === rule.name)?.last_seen
+              const lastFired = ruleHistory.find(h => h.rule_id === rule.id)?.fired_at
               return (
                 <div
                   key={rule.id}
@@ -1524,7 +1533,7 @@ export default function AlertsPage() {
               </button>
               <button
                 onClick={handleSave}
-                disabled={saving || !editRule.name}
+                disabled={saving || !editRule.name || !editRule.ntfy_topic}
                 className="px-5 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
               >
                 {saving ? 'Saving…' : 'Save Rule'}

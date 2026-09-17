@@ -23,6 +23,20 @@ const LOC_POSITIONS: Record<string, { top: number; left: number }> = {
 
 const TUNNELS = [['MSP', 'PHX'], ['MSP', 'CBN'], ['PHX', 'CBN']] as const
 
+// Single source of truth for "is this node the router" — the layout
+// simulation used a broader heuristic (device_type OR label match) while
+// color/radius/click-handling/legend checked device_type alone, so a router
+// node whose device_type isn't exactly 'Router / Firewall' (null, or a more
+// specific label like "Firewalla Gold") would be centered/anchored as the
+// hub by the simulation but rendered and treated as a regular device
+// everywhere else — including being clickable through to a /device page for
+// an id that isn't a real device identity.
+function isRouterNode(n: { device_type: string | null; label: string }): boolean {
+  return n.device_type === 'Router / Firewall'
+    || n.label.toLowerCase().includes('router')
+    || n.label.toLowerCase().includes('firewalla')
+}
+
 // ─── Force simulation (no D3 dependency needed — D3 is available but overkill for this layout) ───
 
 interface SimNode extends GraphNode {
@@ -38,9 +52,7 @@ function useForceSimulation(nodes: GraphNode[], edges: GraphEdge[], w: number, h
   useEffect(() => {
     if (animRef.current) cancelAnimationFrame(animRef.current)
     const cx = w / 2, cy = h / 2
-    const routerIdx = nodes.findIndex(n =>
-      n.device_type === 'Router / Firewall' || n.label.toLowerCase().includes('router') || n.label.toLowerCase().includes('firewalla')
-    )
+    const routerIdx = nodes.findIndex(isRouterNode)
 
     nsRef.current = nodes.map((n, i) => {
       const isRouter = i === routerIdx
@@ -121,8 +133,7 @@ function useForceSimulation(nodes: GraphNode[], edges: GraphEdge[], w: number, h
 }
 
 function nodeColor(n: GraphNode, locColor: string) {
-  const isRouter = n.device_type === 'Router / Firewall'
-  if (isRouter) return locColor
+  if (isRouterNode(n)) return locColor
   if (n.has_threats) return '#f85149'
   if (n.has_cves) return '#e3b341'
   if (n.is_online) return '#3fb950'
@@ -130,8 +141,7 @@ function nodeColor(n: GraphNode, locColor: string) {
 }
 
 function nodeRadius(n: GraphNode, maxBytes: number) {
-  const isRouter = n.device_type === 'Router / Firewall'
-  if (isRouter) return 20
+  if (isRouterNode(n)) return 20
   return Math.max(8, Math.min(22, 8 + ((n.bytes_24h || 0) / Math.max(1, maxBytes)) * 14))
 }
 
@@ -171,11 +181,13 @@ function ForceGraph({ graph, locColor }: { graph: CommGraph; locColor: string })
             return <line key={i} x1={src.x} y1={src.y} x2={tgt.x} y2={tgt.y} stroke="#D1D5DB" strokeWidth={w} />
           })}
           {/* Star spokes to router if no real edges */}
-          {graph.edges.length === 0 && simNodes.map(n => {
-            const router = simNodes.find(r => r.device_type === 'Router / Firewall')
-            if (!router || n.id === router.id) return null
-            return <line key={n.id} x1={router.x} y1={router.y} x2={n.x} y2={n.y} stroke="#E5E7EB" strokeWidth={1} />
-          })}
+          {graph.edges.length === 0 && (() => {
+            const router = simNodes.find(isRouterNode)
+            if (!router) return null
+            return simNodes
+              .filter(n => n.id !== router.id)
+              .map(n => <line key={n.id} x1={router.x} y1={router.y} x2={n.x} y2={n.y} stroke="#E5E7EB" strokeWidth={1} />)
+          })()}
         </g>
         {/* Nodes */}
         <g>
@@ -187,7 +199,7 @@ function ForceGraph({ graph, locColor }: { graph: CommGraph; locColor: string })
                 onMouseEnter={() => setTooltip({ node: n, x: n.x, y: n.y })}
                 onMouseLeave={() => setTooltip(null)}
                 onClick={() => {
-                  if (n.device_type !== 'Router / Firewall') {
+                  if (!isRouterNode(n)) {
                     window.location.href = `/device?identity_id=${encodeURIComponent(n.id)}`
                   }
                 }}
@@ -460,7 +472,7 @@ export default function MapPage() {
                       {/* Device legend */}
                       <div className="mt-6 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-1.5 max-h-56 overflow-y-auto">
                         {graph.nodes
-                          .filter(n => n.device_type !== 'Router / Firewall')
+                          .filter(n => !isRouterNode(n))
                           .sort((a, b) => (b.bytes_24h || 0) - (a.bytes_24h || 0))
                           .map(n => (
                             <div key={n.id}
