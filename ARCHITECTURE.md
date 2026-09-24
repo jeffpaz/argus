@@ -62,7 +62,9 @@ Force-directed graph per location using `react-force-graph-2d`. Location cards a
 
 ### Device Detail (`app/device/page.tsx`)
 
-Loaded by `identity_id` query param. Shows: device header (type icon, badges), open port grid (risk-colored), port history timeline, 7-day uptime timeline bar, anomaly log.
+Loaded by `identity_id` query param. Shows: device header (type icon, badges), open port grid (risk-colored), port history timeline, 7-day uptime timeline bar, 48 h rolling-24h-usage chart, anomaly log.
+
+The bandwidth chart plots Firewalla's rolling last-24h totals as-is (`/network/bandwidth/device`). Per-interval usage can't be derived from rolling totals, so the chart doesn't try.
 
 ---
 

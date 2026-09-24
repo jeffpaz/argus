@@ -446,7 +446,7 @@ function DeviceContent() {
 
       {/* Bandwidth — Last 48h */}
       <div className="bg-a-surface border border-a-border rounded-lg p-5 mb-6">
-        <h2 className="text-[10px] text-a-muted uppercase tracking-wider mb-4">📶 Bandwidth — Last 48h</h2>
+        <h2 className="text-[10px] text-a-muted uppercase tracking-wider mb-4">📶 Rolling 24h Usage — Last 48h</h2>
         {bwHistory.length === 0 ? (
           <div className="text-a-muted text-xs">No bandwidth data collected yet.</div>
         ) : (() => {

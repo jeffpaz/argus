@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-09-24
+
+### Fixed
+- Device page bandwidth chart relabeled "Rolling 24h Usage — Last 48h". The
+  backend now returns Firewalla's rolling last-24h totals instead of differences
+  between snapshots, which were meaningless. All bandwidth numbers shown in the
+  UI were ~30x too high before argus-api 0.4.0 (backend fix, no frontend change needed).
+
 ## [1.2.0] — 2026-06-12
 
 ### Added

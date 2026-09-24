@@ -34,7 +34,7 @@ Argus is a self-hosted network security monitor. It discovers devices across thr
 | `/alerts` | Alerts — cleartext protocols, SSL/TLS issues, network outages, VLAN recommendations, active threats, CVEs |
 | `/report` | Security report — health score grade, history sidebar, Generate Now, Download HTML, iframe report viewer |
 | `/map` | Network map — force-directed topology per location |
-| `/device?identity_id=` | Device detail — port history, uptime timeline, anomaly log |
+| `/device?identity_id=` | Device detail — port history, uptime timeline, rolling 24h usage chart, anomaly log |
 | `/guests` | Guest/lifecycle summary |
 
 ## Getting Started
