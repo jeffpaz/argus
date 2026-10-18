@@ -777,9 +777,18 @@ function normalizeIdentity(d: Record<string, unknown>): DeviceIdentity {
   }
 }
 
+// The backend stores UTC timestamps without an offset ("2026-10-18 22:05:45"),
+// which new Date() would otherwise read as local time.
+export function parseUtc(iso: string): Date {
+  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(iso)) {
+    return new Date(iso.replace(' ', 'T') + 'Z')
+  }
+  return new Date(iso)
+}
+
 export function fmtDate(iso: string | null | undefined): string {
   if (!iso) return '—'
-  return new Date(iso).toLocaleString(undefined, {
+  return parseUtc(iso).toLocaleString(undefined, {
     month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
   })
 }
@@ -793,7 +802,7 @@ export function fmtBytes(bytes: number): string {
 
 export function timeAgo(iso: string | null | undefined): string {
   if (!iso) return '—'
-  const diffMs = Date.now() - new Date(iso).getTime()
+  const diffMs = Date.now() - parseUtc(iso).getTime()
   if (diffMs < 0) return 'just now'
   const diffMin = Math.floor(diffMs / 60_000)
   if (diffMin < 2) return 'just now'
