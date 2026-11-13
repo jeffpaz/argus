@@ -8,12 +8,15 @@ import {
   getDeviceBandwidthHistory, getDeviceDnsAnomalies, getIdentityDnsAnomalies,
   getIdentityDetail, getIdentityBandwidth, getIdentityUptime,
   getLifecycleEvents, getDeviceCves, resolveCve,
+  getAvailability, setAlwaysOn,
   fmtDate, fmtBytes, timeAgo,
   type DeviceDetail, type DeviceIdentity, type PortScanSnapshot, type Anomaly,
   type PortInfo, type UptimeDetail, type DeviceBandwidthPoint, type DnsAnomaly,
   type MacObservation, type LifecycleEvent, type CveMatch,
+  type DeviceAvailability, type SiteAvailability,
 } from '@/lib/argus'
 import ErrorBoundary from '@/components/ErrorBoundary'
+import { AlwaysOnToggle, AvailabilityBadge } from '@/components/Availability'
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip as ReTooltip,
   ResponsiveContainer, CartesianGrid,
@@ -74,6 +77,63 @@ function OsAccuracyBadge({ accuracy }: { accuracy?: number }) {
     <span className={`inline-block px-2 py-0.5 text-[10px] font-semibold border rounded uppercase tracking-wider ml-2 ${cls}`}>
       {accuracy}% conf.
     </span>
+  )
+}
+
+// Second-least-significant bit of the first octet = locally administered
+// (randomized/private) address, which has no registered OUI vendor.
+function isLocallyAdministered(mac: string) {
+  const first = parseInt(mac.slice(0, 2), 16)
+  return !isNaN(first) && (first & 0x02) !== 0
+}
+
+function NetworkIdentity({ ip, mac, vendor, randomized }: {
+  ip: string; mac: string; vendor: string | null; randomized: boolean
+}) {
+  const macNorm   = mac.toUpperCase()
+  const macHex    = mac.replace(/[^0-9a-fA-F]/g, '').toLowerCase()
+  const isPrivate = randomized || (macHex.length === 12 && isLocallyAdministered(macHex))
+  const fields: Array<{ label: string; value: React.ReactNode }> = [
+    { label: 'IP Address', value: ip
+        ? <span className="font-mono text-indigo-600">{ip}</span>
+        : <span className="text-a-muted italic">Unknown</span> },
+    { label: 'MAC Address', value: mac
+        ? <span className="font-mono">{macNorm}</span>
+        : <span className="text-a-muted italic">Unknown</span> },
+    { label: 'MAC Vendor', value: isPrivate ? (
+        <span className="inline-flex items-center gap-2">
+          <span className="text-a-muted italic">None (randomized MAC)</span>
+          <span className="inline-block px-1.5 py-0.5 text-[10px] font-semibold border rounded border-amber-300 bg-amber-50 text-amber-700">
+            Private Address
+          </span>
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-2 flex-wrap">
+          <span>{vendor || <span className="text-a-muted italic">Unknown</span>}</span>
+          {macHex.length === 12 && (
+            <a
+              href={`https://maclookup.app/search/result?mac=${macHex.slice(0, 6)}`}
+              target="_blank" rel="noopener noreferrer"
+              className="text-[11px] text-a-teal hover:underline"
+            >
+              Lookup ↗
+            </a>
+          )}
+        </span>
+      ) },
+  ]
+  return (
+    <div className="bg-a-surface border border-a-border rounded-lg px-6 py-4 mb-6">
+      <h2 className="text-[10px] text-a-muted uppercase tracking-wider mb-3">Network</h2>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+        {fields.map(({ label, value }) => (
+          <div key={label}>
+            <div className="text-[10px] text-a-muted uppercase tracking-wider mb-1">{label}</div>
+            <div className="text-a-text font-medium">{value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -188,6 +248,37 @@ function DeviceContent() {
   const [cves,          setCves]          = useState<CveMatch[]>([])
   const [loading,       setLoading]       = useState(true)
   const [error,         setError]         = useState('')
+  const [alwaysOn,      setAlwaysOnState] = useState(false)
+  const [avail,         setAvail]         = useState<DeviceAvailability | undefined>()
+  const [gatewaySite,   setGatewaySite]   = useState<SiteAvailability | undefined>()
+  const [aoBusy,        setAoBusy]        = useState(false)
+  const [aoError,       setAoError]       = useState('')
+
+  useEffect(() => {
+    if (!identityId) return
+    getAvailability()
+      .then(st => {
+        setAvail(st.devices.find(d => d.device_id === identityId))
+        setGatewaySite(st.sites.find(s => s.gateway_identity_id === identityId))
+      })
+      .catch(() => { /* availability is optional on this page */ })
+  }, [identityId, alwaysOn])
+
+  useEffect(() => {
+    if (device && 'always_on' in device) setAlwaysOnState(Boolean(device.always_on))
+  }, [device])
+
+  async function toggleAlwaysOn(next: boolean) {
+    setAoBusy(true); setAoError('')
+    try {
+      await setAlwaysOn(identityId, next)
+      setAlwaysOnState(next)
+    } catch (e) {
+      setAoError(String(e))
+    } finally {
+      setAoBusy(false)
+    }
+  }
 
   useEffect(() => {
     if (!identityId && !macParam) return
@@ -300,28 +391,30 @@ function DeviceContent() {
               {onlineDot}
               <OsAccuracyBadge accuracy={device.os_accuracy} />
             </h1>
-            <div className="text-xs text-a-muted mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
-              <span className="text-indigo-600 font-medium font-mono">{device.ip}</span>
-              <span className="font-mono">{device.mac}</span>
-              {device.mac_randomized && (
-                <span className="inline-block px-1.5 py-0.5 text-[10px] font-semibold border rounded border-amber-300 bg-amber-50 text-amber-700">
-                  Private Address
-                </span>
-              )}
-              {!device.mac_randomized && (device.vendor || device.manufacturer) && (
-                <span>{device.vendor || device.manufacturer}</span>
-              )}
-            </div>
-            {device.os && <div className="text-xs text-a-muted mt-1">{device.os}</div>}
+            {device.os &&<div className="text-xs text-a-muted mt-1">{device.os}</div>}
             {isOnline === false && device.downtime_since && (
               <div className="text-xs text-a-muted mt-1">
                 Offline since {fmtDate(device.downtime_since)} ({timeAgo(device.downtime_since)})
               </div>
             )}
           </div>
-          <span className={`text-xs font-semibold uppercase tracking-wider px-2.5 py-1 border rounded ${statusColor} border-current/40 bg-current/5`}>
-            {device.status}
-          </span>
+          <div className="flex flex-col items-end gap-2">
+            <span className={`text-xs font-semibold uppercase tracking-wider px-2.5 py-1 border rounded ${statusColor} border-current/40 bg-current/5`}>
+              {device.status}
+            </span>
+            {identityId && (gatewaySite ? (
+              <div className="flex items-center gap-2" title="Site firewall: always on automatically">
+                <span className="text-xs text-a-muted">{gatewaySite.location} firewall · always on</span>
+                <AvailabilityBadge avail={avail} location={device.location} />
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <AlwaysOnToggle checked={alwaysOn} disabled={aoBusy} onChange={toggleAlwaysOn} label="Always on" />
+                {alwaysOn && <AvailabilityBadge avail={avail} location={device.location} />}
+              </div>
+            ))}
+            {aoError && <span className="text-[11px] text-red-500">{aoError}</span>}
+          </div>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mt-5 text-xs">
           {[
@@ -338,6 +431,13 @@ function DeviceContent() {
           ))}
         </div>
       </div>
+
+      <NetworkIdentity
+        ip={device.ip}
+        mac={device.mac}
+        vendor={device.vendor || device.manufacturer || null}
+        randomized={Boolean(device.mac_randomized)}
+      />
 
       {/* Lifecycle */}
       {'lifecycle_state' in device && device.lifecycle_state && (

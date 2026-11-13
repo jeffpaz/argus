@@ -216,6 +216,7 @@ export interface DeviceIdentity extends Device {
   is_guest?:                 boolean
   lifecycle_updated_at?:     string | null
   first_seen?:               string
+  always_on:                 boolean
 }
 
 export interface MapDevice {
@@ -774,6 +775,7 @@ function normalizeIdentity(d: Record<string, unknown>): DeviceIdentity {
     lifecycle_state:           (d.lifecycle_state as LifecycleState) ?? undefined,
     lifecycle_updated_at:      (d.lifecycle_updated_at as string) ?? null,
     is_guest:                  Boolean(d.is_guest),
+    always_on:                 Boolean(d.always_on),
   }
 }
 
@@ -1000,3 +1002,78 @@ export async function getIncidentCount(): Promise<{ count: number }> {
 export async function getHealthHistory(weeks = 12): Promise<{ history: HealthHistoryPoint[] }> {
   return argusGet<{ history: HealthHistoryPoint[] }>(`/reports/health-history?weeks=${weeks}`)
 }
+
+// ── Always-on availability ────────────────────────────────────────────────────
+
+export type DeviceAvailabilityState = 'online' | 'offline' | 'unknown'
+export type SiteAvailabilityState   = 'up' | 'down' | 'unknown'
+
+export interface SiteAvailability {
+  location:                  string
+  label:                     string
+  gateway:                   string
+  gateway_identity_id:       string | null
+  state:                     SiteAvailabilityState
+  state_since:               string | null
+  consecutive_poll_failures: number
+  polling_ok:                boolean
+  last_poll_ok_at:           string | null
+  last_poll_error:           string | null
+  last_checked_at:           string | null
+  api_online:                boolean | null
+  ping_ok:                   boolean | null
+}
+
+export interface DeviceAvailability {
+  device_id:          string
+  name:               string | null
+  location:           string | null
+  state:              DeviceAvailabilityState
+  state_since:        string | null
+  last_seen:          string | null
+  consecutive_misses: number
+  last_checked_at:    string | null
+  source:             string | null
+  muted:              boolean
+  is_gateway:         boolean
+}
+
+export interface AvailabilityStatus {
+  sites:   SiteAvailability[]
+  devices: DeviceAvailability[]
+  summary: {
+    always_on_total: number
+    online:          number
+    offline:         number
+    unknown:         number
+    sites_up:        number
+    sites_down:      number
+  }
+  config: {
+    check_interval_min:       number
+    confirm_polls:            number
+    reminder_interval_hours:  number
+    notifications_configured: boolean
+  }
+}
+
+export interface AlwaysOnSuggestion {
+  device_id:    string
+  name:         string | null
+  location:     string | null
+  ip:           string | null
+  device_type:  string | null
+  manufacturer: string | null
+  reason:       string
+}
+
+export const getAvailability = () => argusGet<AvailabilityStatus>('/availability/')
+export const setAlwaysOn = (deviceId: string, alwaysOn: boolean) =>
+  argusPost<{ identity_id: string; always_on: boolean }>(
+    `/devices/${encodeURIComponent(deviceId)}`, { always_on: alwaysOn }, 'PATCH')
+export const bulkSetAlwaysOn = (deviceIds: string[], alwaysOn: boolean) =>
+  argusPost<{ updated: string[]; not_found: string[]; always_on: boolean }>(
+    '/devices/always-on', { device_ids: deviceIds, always_on: alwaysOn })
+export const getAlwaysOnSuggestions = () => argusGet<AlwaysOnSuggestion[]>('/availability/suggestions')
+export const dismissAlwaysOnSuggestions = (deviceIds: string[]) =>
+  argusPost<{ dismissed: number }>('/availability/suggestions/dismiss', { device_ids: deviceIds })

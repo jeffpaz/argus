@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-11-12
+
+### Added
+- Always-on availability (needs argus-api 0.5.0):
+  - Dashboard availability card: each site's firewall up/down (with poll-failure warning) and counts of always-on devices online/offline.
+  - Device table: always-on toggle and Online / Offline since X / Unknown badge per row, checkbox column with a bulk "Mark always on" / "Remove always on" bar, and an "Always on" filter. Site firewalls show as "Firewall (auto)".
+  - Dismissible "Suggested always-on devices" panel (routers, cameras, servers, IoT sensors) for bulk tagging. Nothing is tagged automatically.
+  - Device page: always-on toggle and availability badge in the header.
+  - Alerts page labels for the new alert types (site down/up, devices offline, reminders, poll failures, test).
+- Device page: Network card with IP, MAC, MAC vendor (with lookup link) and a Private Address badge for randomized MACs.
+
 ## [1.2.1] — 2026-09-24
 
 ### Fixed

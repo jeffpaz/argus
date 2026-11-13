@@ -13,9 +13,10 @@ Argus is a self-hosted network security monitor. It discovers devices across thr
 - **SSL/TLS scanning** — expired / expiring / self-signed / weak-cipher / cert-rotation detection
 - **VLAN segmentation recommendations** — per-location with Firewalla rule suggestions
 - **Network outage detection** — LAN, internet, and all-sites outages with auto-resolution
+- **Always-on availability** — tag devices that should never be off; per-site up/down, Online / Offline-since badges, bulk tagging, suggested devices, and ntfy pushes from the backend
 - **CVE matching** — device service signatures vs NVD data
-- **Weekly security report** — health score (0–100 / A–F), inline-CSS HTML, ntfy delivery
-- **Alert rules engine** — configurable triggers with ntfy cooldown dispatch
+- **Weekly security report** — health score (0–100 / A–F), inline-CSS HTML
+- **Alert rules engine** — configurable triggers with cooldowns and mutes
 
 ## Stack
 
@@ -30,11 +31,11 @@ Argus is a self-hosted network security monitor. It discovers devices across thr
 
 | Route | Description |
 |---|---|
-| `/` | Dashboard — outage banner, 5 stat cards (devices, new, threats, last scan, health score), bandwidth chart, DNS anomalies, device table |
+| `/` | Dashboard — outage banner, 5 stat cards (devices, new, threats, last scan, health score), availability summary (per-site up/down, always-on online/offline counts), always-on suggestions, bandwidth chart, DNS anomalies, device table (always-on toggle + badge per row, bulk select, Always on filter) |
 | `/alerts` | Alerts — cleartext protocols, SSL/TLS issues, network outages, VLAN recommendations, active threats, CVEs |
 | `/report` | Security report — health score grade, history sidebar, Generate Now, Download HTML, iframe report viewer |
 | `/map` | Network map — force-directed topology per location |
-| `/device?identity_id=` | Device detail — port history, uptime timeline, rolling 24h usage chart, anomaly log |
+| `/device?identity_id=` | Device detail — always-on toggle + availability badge, port history, uptime timeline, rolling 24h usage chart, anomaly log |
 | `/guests` | Guest/lifecycle summary |
 
 ## Getting Started
@@ -72,6 +73,11 @@ CI/CD: pushes to `main` deploy automatically via Firebase Hosting GitHub integra
 |---|---|---|
 | GET | `/health` | Dashboard |
 | GET | `/identities/` | Dashboard, Map |
+| GET | `/availability/` | Dashboard, Device |
+| GET | `/availability/suggestions` | Dashboard |
+| POST | `/availability/suggestions/dismiss` | Dashboard |
+| PATCH | `/devices/{id}` | Dashboard row toggle, Device |
+| POST | `/devices/always-on` | Dashboard bulk action, suggestions |
 | GET | `/flows/threats` | Dashboard, Alerts |
 | GET | `/lifecycle/summary` | Dashboard |
 | GET | `/network/bandwidth` | Dashboard |

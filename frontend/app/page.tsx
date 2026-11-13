@@ -7,13 +7,16 @@ import {
   getHealth, getIdentities, getAnomalies, triggerScan,
   getBandwidthSummary, getDnsAnomalies, getThreats, resolveThreat,
   getLifecycleSummary, getLatestReport, getOpenOutages, getIncidentCount,
+  getAvailability, setAlwaysOn, bulkSetAlwaysOn, getAlwaysOnSuggestions, dismissAlwaysOnSuggestions,
   fmtDate, fmtBytes, timeAgo,
   type HealthStatus, type DeviceIdentity, type Anomaly,
   type TopBandwidthDevice, type DnsAnomaly, type Threat,
   type LifecycleSummary, type LifecycleState,
   type EnhancedReport, type OutageEvent,
+  type AvailabilityStatus, type AlwaysOnSuggestion, type DeviceAvailability,
 } from '@/lib/argus'
 import ErrorBoundary from '@/components/ErrorBoundary'
+import { AlwaysOnToggle, AvailabilityBadge, AvailabilitySummary, AlwaysOnSuggestions } from '@/components/Availability'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Cell,
@@ -184,6 +187,16 @@ export default function DashboardPage() {
   const [loadingCharts,  setLoadingCharts]  = useState(true)
   const [lcFilter, setLcFilter] = useState<LifecycleFilter>('all')
 
+  const [availability,  setAvailability]  = useState<AvailabilityStatus | null>(null)
+  const [suggestions,   setSuggestions]   = useState<AlwaysOnSuggestion[]>([])
+  const [hideSuggest,   setHideSuggest]   = useState(() => {
+    try { return typeof window !== 'undefined' && localStorage.getItem('argus_hide_always_on_suggestions') === '1' } catch { return false }
+  })
+  const [alwaysOnOnly,  setAlwaysOnOnly]  = useState(false)
+  const [selected,      setSelected]      = useState<Set<string>>(new Set())
+  const [pendingIds,    setPendingIds]    = useState<Set<string>>(new Set())
+  const [bulkMsg,       setBulkMsg]       = useState('')
+
   const [search,    setSearch]    = useState('')
   const [osFilter,  setOsFilter]  = useState('')
   const [newOnly,   setNewOnly]   = useState(false)
@@ -239,8 +252,50 @@ export default function DashboardPage() {
     }
   }, [])
 
+  const loadAvailability = useCallback(async () => {
+    const [av, sg] = await Promise.allSettled([getAvailability(), getAlwaysOnSuggestions()])
+    if (av.status === 'fulfilled') setAvailability(av.value)
+    if (sg.status === 'fulfilled') setSuggestions(sg.value)
+  }, [])
+
   useEffect(() => { load() }, [load])
   useEffect(() => { loadCharts() }, [loadCharts])
+  useEffect(() => {
+    loadAvailability()
+    const id = setInterval(loadAvailability, 5 * 60_000)
+    return () => clearInterval(id)
+  }, [loadAvailability])
+
+  const availById: Record<string, DeviceAvailability> = Object.fromEntries(
+    (availability?.devices ?? []).map(a => [a.device_id, a]),
+  )
+  const gatewayIds = new Set((availability?.sites ?? []).map(s => s.gateway_identity_id).filter(Boolean) as string[])
+
+  async function applyAlwaysOn(ids: string[], on: boolean) {
+    if (ids.length === 0) return
+    setPendingIds(prev => new Set([...prev, ...ids]))
+    setDevices(prev => prev.map(d => ids.includes(d.identity_id) ? { ...d, always_on: on } : d))
+    try {
+      if (ids.length === 1) await setAlwaysOn(ids[0], on)
+      else await bulkSetAlwaysOn(ids, on)
+      setBulkMsg(`${on ? 'Marked' : 'Unmarked'} ${ids.length} device${ids.length !== 1 ? 's' : ''} always on.`)
+    } catch (e) {
+      setDevices(prev => prev.map(d => ids.includes(d.identity_id) ? { ...d, always_on: !on } : d))
+      setBulkMsg(`Failed: ${String(e)}`)
+    } finally {
+      setPendingIds(prev => { const n = new Set(prev); ids.forEach(i => n.delete(i)); return n })
+      loadAvailability()
+    }
+  }
+
+  function hideSuggestions() {
+    setHideSuggest(true)
+    try { localStorage.setItem('argus_hide_always_on_suggestions', '1') } catch { /* private mode */ }
+  }
+
+  function toggleSelected(id: string) {
+    setSelected(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
+  }
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -295,6 +350,7 @@ export default function DashboardPage() {
       if (q && !d.ip.includes(q) && !d.display_name.toLowerCase().includes(q) && !(d.current_mac ?? '').toLowerCase().includes(q) && !(d.canonical_friendly_name?.toLowerCase() ?? '').includes(q)) return false
       if (osFilter && d.os !== osFilter) return false
       if (newOnly && !d.is_new) return false
+      if (alwaysOnOnly && !d.always_on && !gatewayIds.has(d.identity_id)) return false
       if (lcFilter !== 'all') {
         const state = (d as DeviceIdentity & { lifecycle_state?: string }).lifecycle_state ?? 'active'
         if (state !== lcFilter) return false
@@ -500,6 +556,24 @@ export default function DashboardPage() {
               </div>
             ))}
           </div>
+
+          <AvailabilitySummary
+            status={availability}
+            onFilterAlwaysOn={() => { setAlwaysOnOnly(true); setPage(0) }}
+          />
+
+          {!hideSuggest && suggestions.length > 0 && (
+            <AlwaysOnSuggestions
+              key={suggestions.map(s => s.device_id).join(',')}
+              suggestions={suggestions}
+              onTag={ids => applyAlwaysOn(ids, true)}
+              onDismiss={async ids => {
+                await dismissAlwaysOnSuggestions(ids)
+                setSuggestions(prev => prev.filter(s => !ids.includes(s.device_id)))
+              }}
+              onHide={hideSuggestions}
+            />
+          )}
 
           {/* Open Anomalies */}
           {openAnoms.length > 0 && (
@@ -766,8 +840,42 @@ export default function DashboardPage() {
               New only (5 days)
             </label>
 
+            <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={alwaysOnOnly}
+                onChange={e => { setAlwaysOnOnly(e.target.checked); setPage(0) }}
+                className="accent-indigo-600 w-4 h-4 rounded"
+              />
+              Always on
+            </label>
+
             <span className="ml-auto text-sm text-gray-400">{filtered.length} device{filtered.length !== 1 ? 's' : ''}</span>
           </div>
+
+          {(selected.size > 0 || bulkMsg) && (
+            <div className="flex flex-wrap items-center gap-3 mb-3 bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-2.5 text-sm">
+              {selected.size > 0 && (
+                <>
+                  <span className="font-semibold text-indigo-700">{selected.size} selected</span>
+                  <button
+                    onClick={async () => { await applyAlwaysOn([...selected], true); setSelected(new Set()) }}
+                    className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg"
+                  >
+                    Mark always on
+                  </button>
+                  <button
+                    onClick={async () => { await applyAlwaysOn([...selected], false); setSelected(new Set()) }}
+                    className="px-3 py-1 bg-white border border-gray-200 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-50"
+                  >
+                    Remove always on
+                  </button>
+                  <button onClick={() => setSelected(new Set())} className="text-xs text-indigo-600 hover:underline">Clear</button>
+                </>
+              )}
+              {bulkMsg && <span className="ml-auto text-xs text-gray-500">{bulkMsg}</span>}
+            </div>
+          )}
 
           {/* Device Table */}
           {loading ? (
@@ -793,6 +901,19 @@ export default function DashboardPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-gray-50 border-b border-gray-100">
+                    <th className="pl-4 pr-1 py-3 w-6">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all on this page"
+                        className="accent-indigo-600 w-3.5 h-3.5"
+                        checked={pageSlice.length > 0 && pageSlice.every(d => selected.has(d.identity_id))}
+                        onChange={e => setSelected(prev => {
+                          const n = new Set(prev)
+                          pageSlice.forEach(d => e.target.checked ? n.add(d.identity_id) : n.delete(d.identity_id))
+                          return n
+                        })}
+                      />
+                    </th>
                     <th
                       className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider cursor-pointer hover:text-gray-600 select-none"
                       onClick={() => toggleSort('ip')}
@@ -803,6 +924,7 @@ export default function DashboardPage() {
                     >Hostname / Name <SortArrow k="hostname" /></th>
                     <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider hidden md:table-cell">MAC</th>
                     <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Location</th>
+                    <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Always on</th>
                     <th
                       className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider cursor-pointer hover:text-gray-600 select-none"
                       onClick={() => toggleSort('status')}
@@ -822,7 +944,7 @@ export default function DashboardPage() {
                     <>
                       {loc && locFilter === 'all' && (
                         <tr key={`header-${loc}`}>
-                          <td colSpan={7} className={`px-4 py-2 text-[10px] text-gray-500 font-semibold uppercase tracking-widest bg-gray-50 border-b border-gray-100 border-l-2 ${LOC_CONFIG[loc]?.border ?? 'border-l-gray-300'}`}>
+                          <td colSpan={9} className={`px-4 py-2 text-[10px] text-gray-500 font-semibold uppercase tracking-widest bg-gray-50 border-b border-gray-100 border-l-2 ${LOC_CONFIG[loc]?.border ?? 'border-l-gray-300'}`}>
                             {LOC_CONFIG[loc]?.label ?? loc} <span className="font-normal text-gray-400">({rows.length} shown)</span>
                           </td>
                         </tr>
@@ -833,6 +955,15 @@ export default function DashboardPage() {
                           className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer transition-colors"
                           onClick={() => window.location.href = `/device?identity_id=${encodeURIComponent(d.identity_id)}`}
                         >
+                          <td className="pl-4 pr-1 py-3 w-6" onClick={e => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              aria-label={`Select ${d.display_name || d.ip}`}
+                              className="accent-indigo-600 w-3.5 h-3.5"
+                              checked={selected.has(d.identity_id)}
+                              onChange={() => toggleSelected(d.identity_id)}
+                            />
+                          </td>
                           <td className="px-4 py-3 whitespace-nowrap">
                             <div className="flex items-center gap-1.5">
                               <OnlineDot isOnline={d.is_online} downtimeSince={d.downtime_since} />
@@ -869,6 +1000,23 @@ export default function DashboardPage() {
                           </td>
                           <td className="px-4 py-3">
                             {d.location ? <LocationBadge location={d.location} /> : <span className="text-gray-300">—</span>}
+                          </td>
+                          <td className="px-4 py-3">
+                            {gatewayIds.has(d.identity_id) ? (
+                              <div className="flex flex-col items-start gap-1">
+                                <span className="text-[10px] text-gray-400" title="Site firewall: monitored automatically">Firewall (auto)</span>
+                                <AvailabilityBadge avail={availById[d.identity_id]} location={d.location} />
+                              </div>
+                            ) : (
+                              <div className="flex flex-col items-start gap-1">
+                                <AlwaysOnToggle
+                                  checked={d.always_on}
+                                  disabled={pendingIds.has(d.identity_id)}
+                                  onChange={next => applyAlwaysOn([d.identity_id], next)}
+                                />
+                                {d.always_on && <AvailabilityBadge avail={availById[d.identity_id]} location={d.location} />}
+                              </div>
+                            )}
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex flex-col gap-0.5">
