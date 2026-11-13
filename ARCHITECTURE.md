@@ -35,7 +35,7 @@ Fires 8 parallel API calls via `Promise.allSettled` on mount:
 | `getAlwaysOnSuggestions()` | Suggested always-on devices panel |
 | *(inline)* | Open threats count |
 
-Renders: outage banner (if open outages exist), 5 summary stat cards, availability summary, always-on suggestions (dismissible; hiding the panel is remembered in localStorage), bandwidth bar chart, DNS anomaly table, device table with location group headers and sort/filter/pagination.
+Renders: outage banner (if open outages exist), 5 summary stat cards, availability summary, always-on suggestions (dismissible; hiding the panel is remembered in localStorage), bandwidth bar chart, DNS anomaly table, device table with location group headers, MAC and Manufacturer columns (randomized MACs show "Private (randomized)"), and sort/filter/pagination.
 
 Always-on in the device table: a checkbox column (select all on page) drives a bulk bar (Mark / Remove always on → `POST /devices/always-on`); each row has an `AlwaysOnToggle` (`PATCH /devices/{id}`, optimistic, rolled back on error) and, when tagged, an `AvailabilityBadge`. Site firewalls show "Firewall (auto)" instead of a toggle. The "Always on" filter shows tagged devices plus firewalls.
 

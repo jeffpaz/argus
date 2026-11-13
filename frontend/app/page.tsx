@@ -94,6 +94,12 @@ const DEVICE_TYPE_ICONS: Record<string, string> = {
   'Smart Home Device': '🏠',
 }
 
+// Locally administered bit set = randomized/private MAC (no registered vendor).
+function isPrivateMac(mac?: string | null) {
+  const hex = (mac ?? '').replace(/[^0-9a-fA-F]/g, '')
+  return hex.length === 12 && (parseInt(hex.slice(0, 2), 16) & 0x02) !== 0
+}
+
 function sortIp(ip: string) {
   return ip.split('.').map(n => n.padStart(3, '0')).join('.')
 }
@@ -923,6 +929,7 @@ export default function DashboardPage() {
                       onClick={() => toggleSort('hostname')}
                     >Hostname / Name <SortArrow k="hostname" /></th>
                     <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider hidden md:table-cell">MAC</th>
+                    <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider hidden md:table-cell">Manufacturer</th>
                     <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Location</th>
                     <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Always on</th>
                     <th
@@ -944,7 +951,7 @@ export default function DashboardPage() {
                     <>
                       {loc && locFilter === 'all' && (
                         <tr key={`header-${loc}`}>
-                          <td colSpan={9} className={`px-4 py-2 text-[10px] text-gray-500 font-semibold uppercase tracking-widest bg-gray-50 border-b border-gray-100 border-l-2 ${LOC_CONFIG[loc]?.border ?? 'border-l-gray-300'}`}>
+                          <td colSpan={10} className={`px-4 py-2 text-[10px] text-gray-500 font-semibold uppercase tracking-widest bg-gray-50 border-b border-gray-100 border-l-2 ${LOC_CONFIG[loc]?.border ?? 'border-l-gray-300'}`}>
                             {LOC_CONFIG[loc]?.label ?? loc} <span className="font-normal text-gray-400">({rows.length} shown)</span>
                           </td>
                         </tr>
@@ -997,6 +1004,13 @@ export default function DashboardPage() {
                                 +{d.all_macs.length - 1} more
                               </div>
                             )}
+                          </td>
+                          <td className="px-4 py-3 text-xs hidden md:table-cell max-w-[180px]">
+                            {d.mac_randomized || isPrivateMac(d.current_mac ?? d.mac)
+                              ? <span className="text-gray-400 italic">Private (randomized)</span>
+                              : d.manufacturer && d.manufacturer !== 'Unknown'
+                                ? <span className="text-gray-700 truncate block" title={d.manufacturer}>{d.manufacturer}</span>
+                                : <span className="text-gray-300">—</span>}
                           </td>
                           <td className="px-4 py-3">
                             {d.location ? <LocationBadge location={d.location} /> : <span className="text-gray-300">—</span>}

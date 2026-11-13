@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-11-12
+
+### Added
+- Device table: Manufacturer column after MAC (MAC vendor; "Private (randomized)" for randomized MACs). PHX/CBN rows now show the MAC and vendor Firewalla reports (needs argus-api 0.5.1).
+
 ## [1.3.0] — 2026-11-12
 
 ### Added
