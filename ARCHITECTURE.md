@@ -35,7 +35,7 @@ Fires 8 parallel API calls via `Promise.allSettled` on mount:
 | `getAlwaysOnSuggestions()` | Suggested always-on devices panel |
 | *(inline)* | Open threats count |
 
-Renders: outage banner (if open outages exist), 5 summary stat cards, availability summary, always-on suggestions (dismissible; hiding the panel is remembered in localStorage), bandwidth bar chart, DNS anomaly table, device table with location group headers, MAC and Manufacturer columns (randomized MACs show "Private (randomized)"), and sort/filter/pagination.
+Renders: outage banner (if open outages exist), 5 summary stat cards, availability summary (click a count to list those devices in the card), always-on suggestions (dismissible; hiding the panel is remembered in localStorage), bandwidth bar chart, DNS anomaly table, device table with location group headers, MAC and Manufacturer columns (randomized MACs show "Private (randomized)"), and sort/filter/pagination.
 
 Always-on in the device table: a checkbox column (select all on page) drives a bulk bar (Mark / Remove always on → `POST /devices/always-on`); each row has an `AlwaysOnToggle` (`PATCH /devices/{id}`, optimistic, rolled back on error) and, when tagged, an `AvailabilityBadge`. Site firewalls show "Firewall (auto)" instead of a toggle. The "Always on" filter shows tagged devices plus firewalls.
 
@@ -43,6 +43,7 @@ Always-on in the device table: a checkbox column (select all on page) drives a b
 
 Sections rendered in order:
 1. Active Threat Matches — severity-graded table, Resolve button
+   - Incidents: per-incident Resolve plus "Mark all resolved" (`POST /incidents/resolve-all`)
 2. CVE Matches — CVSS score, affected device + port
 3. Cleartext Protocol Usage — protocol extracted from `t.detail`, severity badge
 4. SSL/TLS Issues — color-coded by threat type, Run SSL Scan button

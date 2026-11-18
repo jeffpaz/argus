@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import {
   fmtDate, timeAgo,
-  type AvailabilityStatus, type DeviceAvailability, type AlwaysOnSuggestion,
+  type AvailabilityStatus, type DeviceAvailability, type AlwaysOnSuggestion, type DeviceIdentity,
 } from '@/lib/argus'
 
 // Same palette as the dashboard's location badges.
@@ -64,13 +64,50 @@ export function AvailabilityBadge({ avail, location }: { avail?: DeviceAvailabil
   )
 }
 
-/** Dashboard card: per-site up/down plus always-on device counts. */
-export function AvailabilitySummary({ status, onFilterAlwaysOn }: {
+type CountFilter = 'all' | 'online' | 'offline' | 'unknown'
+
+/** Readable form of device_availability.last_source. */
+function sourceLabel(src: string): string {
+  if (src.startsWith('firewalla:') && src.endsWith(':online')) return 'Firewalla: online'
+  return ({
+    'firewalla:offline': 'Firewalla: offline',
+    not_reported_by_firewalla: 'Not in Firewalla',
+    last_seen: 'Recently seen',
+    site_check: 'Site check',
+    poll_failed: 'Poll failed',
+    no_site: 'No site',
+  } as Record<string, string>)[src] ?? src
+}
+
+/** Dashboard card: per-site up/down plus always-on device counts.
+ *  Clicking a count opens the list of those devices inside the card. */
+export function AvailabilitySummary({ status, devices, onFilterAlwaysOn }: {
   status: AvailabilityStatus | null
+  devices?: DeviceIdentity[]
   onFilterAlwaysOn?: () => void
 }) {
+  const [open, setOpen] = useState<CountFilter | null>(null)
   if (!status) return null
   const { summary, sites, config } = status
+  const byId = new Map((devices ?? []).map(d => [d.identity_id, d]))
+  const tagged = status.devices.filter(d => !d.is_gateway)
+  const shown = open === null ? [] : tagged
+    .filter(d => open === 'all' || d.state === open)
+    // offline first, then longest-offline first, then name
+    .sort((a, b) => (a.state === 'offline' ? 0 : 1) - (b.state === 'offline' ? 0 : 1)
+      || (a.state_since ?? '').localeCompare(b.state_since ?? '')
+      || (a.name ?? '').localeCompare(b.name ?? ''))
+
+  const counts: { key: CountFilter; label: string; value: number; cls: string; ring: string }[] = [
+    { key: 'all', label: 'Always on', value: summary.always_on_total, cls: 'text-indigo-600', ring: 'ring-indigo-200 bg-indigo-50/60' },
+    { key: 'online', label: 'Online', value: summary.online, cls: 'text-green-600', ring: 'ring-green-200 bg-green-50/60' },
+    { key: 'offline', label: 'Offline', value: summary.offline, cls: summary.offline ? 'text-red-600' : 'text-gray-300', ring: 'ring-red-200 bg-red-50/60' },
+  ]
+  if (summary.unknown > 0) {
+    counts.push({ key: 'unknown', label: 'Pending', value: summary.unknown, cls: 'text-gray-400', ring: 'ring-gray-200 bg-gray-50' })
+  }
+  const openLabel = counts.find(c => c.key === open)?.label
+
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-5 mb-8 shadow-card">
       <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
@@ -101,32 +138,99 @@ export function AvailabilitySummary({ status, onFilterAlwaysOn }: {
             )
           })}
         </div>
-        <button
-          type="button"
-          onClick={onFilterAlwaysOn}
-          className="flex items-center gap-4 text-left rounded-xl px-1 hover:opacity-80"
-          title="Show always-on devices"
-        >
-          <div>
-            <div className="text-[10px] text-gray-400 uppercase tracking-wider">Always on</div>
-            <div className="text-2xl font-bold text-indigo-600">{summary.always_on_total}</div>
+        <div className="flex items-center gap-1">
+          {counts.map(c => (
+            <button
+              key={c.key}
+              type="button"
+              aria-expanded={open === c.key}
+              onClick={() => setOpen(prev => prev === c.key ? null : c.key)}
+              title={`Show ${c.label.toLowerCase()} devices`}
+              className={`text-left rounded-lg px-3 py-1.5 transition-colors hover:bg-gray-50 ${open === c.key ? `ring-1 ${c.ring}` : ''}`}
+            >
+              <div className="text-[10px] text-gray-400 uppercase tracking-wider">{c.label}</div>
+              <div className={`text-2xl font-bold ${c.cls}`}>{c.value}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {open !== null && (
+        <div className="mt-5 border-t border-gray-100 pt-4">
+          <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+            <h3 className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
+              {openLabel} · {shown.length} device{shown.length === 1 ? '' : 's'}
+            </h3>
+            <div className="flex items-center gap-3">
+              {onFilterAlwaysOn && (
+                <button type="button" onClick={onFilterAlwaysOn} className="text-[11px] text-indigo-600 hover:underline">
+                  Show in device table
+                </button>
+              )}
+              <button type="button" onClick={() => setOpen(null)} className="text-gray-400 hover:text-gray-600 text-xs" title="Close">✕</button>
+            </div>
           </div>
-          <div>
-            <div className="text-[10px] text-gray-400 uppercase tracking-wider">Online</div>
-            <div className="text-2xl font-bold text-green-600">{summary.online}</div>
-          </div>
-          <div>
-            <div className="text-[10px] text-gray-400 uppercase tracking-wider">Offline</div>
-            <div className={`text-2xl font-bold ${summary.offline ? 'text-red-600' : 'text-gray-300'}`}>{summary.offline}</div>
-          </div>
-          {summary.unknown > 0 && (
-            <div>
-              <div className="text-[10px] text-gray-400 uppercase tracking-wider">Pending</div>
-              <div className="text-2xl font-bold text-gray-400">{summary.unknown}</div>
+          {shown.length === 0 ? (
+            <p className="text-xs text-gray-400 py-3">No {openLabel?.toLowerCase()} devices.</p>
+          ) : (
+            <div className="overflow-x-auto border border-gray-100 rounded-lg">
+              <table className="w-full text-xs">
+                <thead className="bg-gray-50">
+                  <tr className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
+                    <th className="text-left px-3 py-2">Device</th>
+                    <th className="text-left px-3 py-2">Status</th>
+                    <th className="text-left px-3 py-2 hidden md:table-cell">IP / MAC</th>
+                    <th className="text-left px-3 py-2 hidden lg:table-cell">Type</th>
+                    <th className="text-left px-3 py-2">Last seen</th>
+                    <th className="text-left px-3 py-2 hidden md:table-cell">Checked</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {shown.map(a => {
+                    const d = byId.get(a.device_id)
+                    const type = [d?.device_type, d?.manufacturer].filter(x => x && x !== 'Unknown').join(' · ')
+                    const mac = d?.current_mac ?? d?.mac
+                    return (
+                      <tr key={a.device_id}
+                          onClick={() => { window.location.href = `/device?identity_id=${encodeURIComponent(a.device_id)}` }}
+                          className={`cursor-pointer hover:bg-gray-50 ${a.state === 'offline' ? 'bg-red-50/40' : ''}`}>
+                        <td className="px-3 py-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            {a.location && <span className={`${PILL} ${LOC_BADGE[a.location] ?? 'bg-gray-50 text-gray-500 border-gray-200'}`}>{a.location}</span>}
+                            <span className="font-medium text-gray-800 truncate">{a.name || a.device_id}</span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2">
+                          <AvailabilityBadge avail={a} location={a.location} />
+                          {a.state === 'offline' && a.state_since && (
+                            <div className="text-[10px] text-gray-400 mt-0.5">since {fmtDate(a.state_since)}</div>
+                          )}
+                          {a.state !== 'offline' && a.consecutive_misses > 0 && (
+                            <div className="text-[10px] text-amber-600 mt-0.5">missed {a.consecutive_misses} check{a.consecutive_misses === 1 ? '' : 's'}</div>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 hidden md:table-cell font-mono text-[11px]">
+                          <div className="text-indigo-600">{d?.ip || '—'}</div>
+                          {mac && <div className="text-gray-400">{mac}</div>}
+                        </td>
+                        <td className="px-3 py-2 hidden lg:table-cell text-gray-600 max-w-[220px] truncate" title={type}>{type || '—'}</td>
+                        <td className="px-3 py-2 text-gray-600 whitespace-nowrap" title={a.last_seen ? fmtDate(a.last_seen) : undefined}>
+                          {a.last_seen ? timeAgo(a.last_seen) : '—'}
+                        </td>
+                        <td className="px-3 py-2 hidden md:table-cell text-gray-400 whitespace-nowrap"
+                            title={a.last_checked_at ? fmtDate(a.last_checked_at) : undefined}>
+                          {a.last_checked_at ? timeAgo(a.last_checked_at) : 'Not yet'}
+                          {a.source && <span className="ml-1">· {sourceLabel(a.source)}</span>}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
-        </button>
-      </div>
+        </div>
+      )}
     </div>
   )
 }

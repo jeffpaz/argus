@@ -565,6 +565,7 @@ export default function DashboardPage() {
 
           <AvailabilitySummary
             status={availability}
+            devices={devices}
             onFilterAlwaysOn={() => { setAlwaysOnOnly(true); setPage(0) }}
           />
 

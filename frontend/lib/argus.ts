@@ -995,6 +995,11 @@ export async function updateIncident(id: number, body: { status?: string; resolv
   return argusPost<Incident>(`/incidents/${id}`, body, 'PATCH')
 }
 
+/** Resolve every incident with the given status(es) server-side, not just the loaded page. */
+export async function resolveAllIncidents(status = 'open,monitoring', resolved_note?: string): Promise<{ resolved: number }> {
+  return argusPost<{ resolved: number }>('/incidents/resolve-all', { status, resolved_note })
+}
+
 export async function getIncidentCount(): Promise<{ count: number }> {
   return argusGet<{ count: number }>('/incidents/count')
 }

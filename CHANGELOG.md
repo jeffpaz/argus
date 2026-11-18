@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.3.2] — 2026-11-17
+
+### Added
+- Dashboard availability card: click Always on / Online / Offline / Pending to open the matching devices in the card (offline first, with status, IP/MAC, type, last seen and last check source); rows link to the device page.
+- Alerts → Incidents: "Mark all resolved" button with an optional note. Resolves every open + monitoring incident server-side (only monitoring on the Monitoring tab), not just the loaded page (needs argus-api `POST /incidents/resolve-all`).
+
 ## [1.3.1] — 2026-11-12
 
 ### Added

@@ -31,8 +31,8 @@ Argus is a self-hosted network security monitor. It discovers devices across thr
 
 | Route | Description |
 |---|---|
-| `/` | Dashboard — outage banner, 5 stat cards (devices, new, threats, last scan, health score), availability summary (per-site up/down, always-on online/offline counts), always-on suggestions, bandwidth chart, DNS anomalies, device table (MAC + manufacturer columns, always-on toggle + badge per row, bulk select, Always on filter) |
-| `/alerts` | Alerts — cleartext protocols, SSL/TLS issues, network outages, VLAN recommendations, active threats, CVEs |
+| `/` | Dashboard — outage banner, 5 stat cards (devices, new, threats, last scan, health score), availability summary (per-site up/down, always-on online/offline counts; click a count to list those devices), always-on suggestions, bandwidth chart, DNS anomalies, device table (MAC + manufacturer columns, always-on toggle + badge per row, bulk select, Always on filter) |
+| `/alerts` | Alerts — cleartext protocols, SSL/TLS issues, network outages, VLAN recommendations, active threats and incidents (bulk "Mark all resolved"), CVEs |
 | `/report` | Security report — health score grade, history sidebar, Generate Now, Download HTML, iframe report viewer |
 | `/map` | Network map — force-directed topology per location |
 | `/device?identity_id=` | Device detail — always-on toggle + availability badge, port history, uptime timeline, rolling 24h usage chart, anomaly log |

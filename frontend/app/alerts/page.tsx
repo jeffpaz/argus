@@ -9,7 +9,7 @@ import {
   getThreats, getOutageHistory, getVlanRecommendations, updateVlanRecommendation,
   runVlanAnalysis, getSslIssues, triggerSslScan,
   getGroupedAlerts, getAlertHistory, getAlertMutes, createAlertMute, deleteAlertMute,
-  getIncidents, getIncidentDetail, updateIncident,
+  getIncidents, getIncidentDetail, updateIncident, resolveAllIncidents, getIncidentCount,
   fmtDate, timeAgo,
   type AlertRule, type AlertHistoryEntry, type CveSummary, type CveMatch,
   type Threat, type OutageEvent, type VlanRecommendation, type SslIssue,
@@ -181,6 +181,8 @@ export default function AlertsPage() {
   const [incidentTimelines, setIncidentTimelines] = useState<Record<number, IncidentDetail>>({})
   const [resolveTarget, setResolveTarget] = useState<Incident | null>(null)
   const [resolveNote, setResolveNote] = useState('')
+  // Bulk resolve: null = closed, otherwise how many incidents it will resolve
+  const [resolveAllCount, setResolveAllCount] = useState<number | null>(null)
   const [resolvingSaving, setResolvingSaving] = useState(false)
 
   // Mute modal state
@@ -372,7 +374,32 @@ export default function AlertsPage() {
     setExpandedIncidents(next)
   }
 
+  // 'monitoring' tab resolves only monitoring; Open and All resolve open + monitoring.
+  const bulkStatus = incidentFilter === 'monitoring' ? 'monitoring' : 'open,monitoring'
+
+  async function openResolveAll() {
+    const n = bulkStatus === 'monitoring'
+      ? incidents.filter(i => i.status === 'monitoring').length
+      : await getIncidentCount().then(r => r.count).catch(() => openIncidentCount)
+    setResolveNote('')
+    setResolveAllCount(n)
+  }
+
   async function handleResolveConfirm() {
+    if (resolveAllCount !== null) {
+      setResolvingSaving(true)
+      try {
+        await resolveAllIncidents(bulkStatus, resolveNote || undefined)
+        setResolveAllCount(null)
+        setResolveNote('')
+        await loadIncidents(incidentFilter)
+      } catch (e) {
+        alert(`Failed to resolve: ${e}`)
+      } finally {
+        setResolvingSaving(false)
+      }
+      return
+    }
     if (!resolveTarget) return
     setResolvingSaving(true)
     try {
@@ -462,7 +489,15 @@ export default function AlertsPage() {
                 </span>
               )}
             </h2>
-            <div className="flex gap-1">
+            <div className="flex items-center gap-1">
+              {incidentFilter !== 'resolved' && incidents.some(i => i.status !== 'resolved') && (
+                <button
+                  onClick={openResolveAll}
+                  className="mr-2 px-2.5 py-1 rounded-full text-[11px] font-semibold border border-green-200 bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
+                >
+                  ✓ Mark all resolved
+                </button>
+              )}
               {(['open', 'monitoring', 'resolved', 'all'] as const).map(f => (
                 <button
                   key={f}
@@ -1233,17 +1268,25 @@ export default function AlertsPage() {
       </main>
 
       {/* ── Resolve Incident Modal ───────────────────────────────────────────── */}
-      {resolveTarget && (
+      {(resolveTarget || resolveAllCount !== null) && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm">
             <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-gray-100">
-              <h3 className="font-semibold text-gray-900 text-sm">✅ Resolve Incident</h3>
-              <button onClick={() => setResolveTarget(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+              <h3 className="font-semibold text-gray-900 text-sm">{resolveAllCount !== null ? '✅ Resolve All Incidents' : '✅ Resolve Incident'}</h3>
+              <button onClick={() => { setResolveTarget(null); setResolveAllCount(null) }} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
             </div>
             <div className="px-5 py-4 space-y-3">
-              <p className="text-xs text-gray-500">
-                Incident: <span className="font-medium text-gray-800">{resolveTarget.title}</span>
-              </p>
+              {resolveAllCount !== null ? (
+                <p className="text-xs text-gray-500">
+                  Resolve <span className="font-semibold text-gray-800">{resolveAllCount}</span>{' '}
+                  {bulkStatus === 'monitoring' ? 'monitoring' : 'open and monitoring'} incident{resolveAllCount === 1 ? '' : 's'}?
+                  New activity will open new incidents as usual.
+                </p>
+              ) : resolveTarget && (
+                <p className="text-xs text-gray-500">
+                  Incident: <span className="font-medium text-gray-800">{resolveTarget.title}</span>
+                </p>
+              )}
               <div>
                 <label className="block text-xs font-semibold text-gray-500 mb-1">Resolution note (optional)</label>
                 <input
@@ -1256,7 +1299,7 @@ export default function AlertsPage() {
               </div>
             </div>
             <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-gray-100">
-              <button onClick={() => setResolveTarget(null)} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors">
+              <button onClick={() => { setResolveTarget(null); setResolveAllCount(null) }} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors">
                 Cancel
               </button>
               <button
@@ -1264,7 +1307,7 @@ export default function AlertsPage() {
                 disabled={resolvingSaving}
                 className="px-5 py-2 bg-green-600 text-white text-sm font-semibold rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
               >
-                {resolvingSaving ? 'Resolving…' : 'Mark Resolved'}
+                {resolvingSaving ? 'Resolving…' : resolveAllCount !== null ? `Resolve ${resolveAllCount}` : 'Mark Resolved'}
               </button>
             </div>
           </div>
