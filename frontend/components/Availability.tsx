@@ -282,21 +282,33 @@ export function AlwaysOnSuggestions({ suggestions, onTag, onDismiss, onHide }: {
       </div>
       <div className="max-h-64 overflow-y-auto divide-y divide-gray-50 border border-gray-100 rounded-lg">
         {suggestions.map(s => (
-          <label key={s.device_id} className="flex items-center gap-3 px-3 py-2 text-xs hover:bg-gray-50 cursor-pointer">
-            <input type="checkbox" className="accent-indigo-600 w-3.5 h-3.5" checked={picked.has(s.device_id)} onChange={() => toggle(s.device_id)} />
+          <div
+            key={s.device_id}
+            onClick={() => { window.location.href = `/device?identity_id=${encodeURIComponent(s.device_id)}` }}
+            title="Open device details"
+            className="group flex items-center gap-3 px-3 py-2 text-xs hover:bg-gray-50 cursor-pointer"
+          >
+            <input
+              type="checkbox"
+              className="accent-indigo-600 w-3.5 h-3.5 cursor-pointer"
+              checked={picked.has(s.device_id)}
+              onChange={() => toggle(s.device_id)}
+              onClick={e => e.stopPropagation()}
+              aria-label={`Select ${s.name || s.device_id}`}
+            />
             {s.location && <span className={`${PILL} ${LOC_BADGE[s.location] ?? 'bg-gray-50 text-gray-500 border-gray-200'}`}>{s.location}</span>}
-            <span className="font-medium text-gray-800 min-w-0 truncate">{s.name || s.device_id}</span>
+            <span className="font-medium text-gray-800 min-w-0 truncate group-hover:text-indigo-600 group-hover:underline">{s.name || s.device_id}</span>
             {s.ip && <span className="font-mono text-[11px] text-indigo-600">{s.ip}</span>}
             <span className="ml-auto text-[11px] text-gray-400 truncate">{s.reason}</span>
             <button
               type="button"
               title="Don't suggest this device again"
-              onClick={e => { e.preventDefault(); run(() => onDismiss([s.device_id])) }}
+              onClick={e => { e.stopPropagation(); run(() => onDismiss([s.device_id])) }}
               className="text-gray-300 hover:text-gray-600 px-1"
             >
               ✕
             </button>
-          </label>
+          </div>
         ))}
       </div>
     </div>

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- Suggested always-on devices: clicking a row opens that device's detail page. The checkbox and ✕ still select and dismiss.
+
 ## [1.3.2] — 2026-11-17
 
 ### Added
