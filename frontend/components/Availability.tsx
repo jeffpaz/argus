@@ -15,28 +15,53 @@ const LOC_BADGE: Record<string, string> = {
 const PILL = 'inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold border rounded-full uppercase tracking-wider whitespace-nowrap'
 
 /** Small switch. Stops click propagation so it works inside clickable rows. */
-export function AlwaysOnToggle({ checked, onChange, disabled, label }: {
+export function AlwaysOnToggle({ checked, onChange, disabled, label, ariaLabel, title, onClass }: {
   checked: boolean
   onChange: (next: boolean) => void
   disabled?: boolean
   label?: string
+  ariaLabel?: string
+  title?: string
+  onClass?: string
 }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
-      aria-label={label ?? 'Always on'}
-      title={checked ? 'Always on: Argus alerts when it goes offline' : 'Mark as always on'}
+      aria-label={label ?? ariaLabel ?? 'Always on'}
+      title={title ?? (checked ? 'Always on: Argus alerts when it goes offline' : 'Mark as always on')}
       disabled={disabled}
       onClick={e => { e.stopPropagation(); onChange(!checked) }}
       className="inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-wait"
     >
-      <span className={`relative inline-flex h-4 w-7 shrink-0 rounded-full transition-colors ${checked ? 'bg-indigo-500' : 'bg-gray-200'}`}>
+      <span className={`relative inline-flex h-4 w-7 shrink-0 rounded-full transition-colors ${checked ? (onClass ?? 'bg-indigo-500') : 'bg-gray-200'}`}>
         <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
       </span>
       {label && <span className="text-xs text-gray-600">{label}</span>}
     </button>
+  )
+}
+
+/** Switch for the per-device unusual-hours override. */
+export function UnusualHoursToggle({ checked, onChange, disabled, label }: {
+  checked: boolean
+  onChange: (next: boolean) => void
+  disabled?: boolean
+  label?: string
+}) {
+  return (
+    <AlwaysOnToggle
+      checked={checked}
+      onChange={onChange}
+      disabled={disabled}
+      label={label}
+      ariaLabel="Any hours"
+      onClass="bg-amber-500"
+      title={checked
+        ? 'Any hours: activity at unusual hours is not alerted for this device'
+        : 'Allow activity at any hour (no unusual-hours alerts)'}
+    />
   )
 }
 
@@ -236,11 +261,23 @@ export function AvailabilitySummary({ status, devices, onFilterAlwaysOn }: {
 }
 
 /** Dismissible list of devices device_classifier thinks are always-on. Never auto-tags. */
-export function AlwaysOnSuggestions({ suggestions, onTag, onDismiss, onHide }: {
+export function AlwaysOnSuggestions({
+  suggestions, onTag, onDismiss, onHide,
+  title = 'Suggested always-on devices',
+  blurb = 'These look like infrastructure (routers, cameras, servers, IoT sensors). Nothing is tagged until you choose.',
+  actionLabel = (n: number) => `Mark ${n} always on`,
+  accent = 'border-l-indigo-500',
+  icon = '💡',
+}: {
   suggestions: AlwaysOnSuggestion[]
   onTag: (ids: string[]) => Promise<void>
   onDismiss: (ids: string[]) => Promise<void>
   onHide: () => void
+  title?: string
+  blurb?: string
+  actionLabel?: (n: number) => string
+  accent?: string
+  icon?: string
 }) {
   const [picked, setPicked] = useState<Set<string>>(() => new Set(suggestions.map(s => s.device_id)))
   const [busy, setBusy] = useState(false)
@@ -254,13 +291,11 @@ export function AlwaysOnSuggestions({ suggestions, onTag, onDismiss, onHide }: {
   const ids = suggestions.map(s => s.device_id).filter(id => picked.has(id))
 
   return (
-    <div className="bg-white border border-gray-200 border-l-4 border-l-indigo-500 rounded-xl p-5 mb-8 shadow-card">
+    <div className={`bg-white border border-gray-200 border-l-4 ${accent} rounded-xl p-5 mb-8 shadow-card`}>
       <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
         <div>
-          <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">💡 Suggested always-on devices</h2>
-          <p className="text-xs text-gray-500 mt-1">
-            These look like infrastructure (routers, cameras, servers, IoT sensors). Nothing is tagged until you choose.
-          </p>
+          <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{icon} {title}</h2>
+          <p className="text-xs text-gray-500 mt-1">{blurb}</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -268,7 +303,7 @@ export function AlwaysOnSuggestions({ suggestions, onTag, onDismiss, onHide }: {
             onClick={() => run(() => onTag(ids))}
             className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg disabled:opacity-40"
           >
-            Mark {ids.length} always on
+            {actionLabel(ids.length)}
           </button>
           <button
             disabled={busy || ids.length === 0}

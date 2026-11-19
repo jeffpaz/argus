@@ -8,7 +8,7 @@ import {
   getDeviceBandwidthHistory, getDeviceDnsAnomalies, getIdentityDnsAnomalies,
   getIdentityDetail, getIdentityBandwidth, getIdentityUptime,
   getLifecycleEvents, getDeviceCves, resolveCve,
-  getAvailability, setAlwaysOn,
+  getAvailability, setAlwaysOn, setUnusualHoursOk,
   fmtDate, fmtBytes, timeAgo,
   type DeviceDetail, type DeviceIdentity, type PortScanSnapshot, type Anomaly,
   type PortInfo, type UptimeDetail, type DeviceBandwidthPoint, type DnsAnomaly,
@@ -16,7 +16,7 @@ import {
   type DeviceAvailability, type SiteAvailability,
 } from '@/lib/argus'
 import ErrorBoundary from '@/components/ErrorBoundary'
-import { AlwaysOnToggle, AvailabilityBadge } from '@/components/Availability'
+import { AlwaysOnToggle, AvailabilityBadge, UnusualHoursToggle } from '@/components/Availability'
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip as ReTooltip,
   ResponsiveContainer, CartesianGrid,
@@ -253,6 +253,9 @@ function DeviceContent() {
   const [gatewaySite,   setGatewaySite]   = useState<SiteAvailability | undefined>()
   const [aoBusy,        setAoBusy]        = useState(false)
   const [aoError,       setAoError]       = useState('')
+  const [anyHours,      setAnyHours]      = useState(false)
+  const [uhBusy,        setUhBusy]        = useState(false)
+  const [uhMsg,         setUhMsg]         = useState('')
 
   useEffect(() => {
     if (!identityId) return
@@ -266,7 +269,21 @@ function DeviceContent() {
 
   useEffect(() => {
     if (device && 'always_on' in device) setAlwaysOnState(Boolean(device.always_on))
+    if (device && 'unusual_hours_ok' in device) setAnyHours(Boolean(device.unusual_hours_ok))
   }, [device])
+
+  async function toggleAnyHours(next: boolean) {
+    setUhBusy(true); setUhMsg('')
+    try {
+      const res = await setUnusualHoursOk(identityId, next)
+      setAnyHours(next)
+      if (res.alerts_resolved) setUhMsg(`Resolved ${res.alerts_resolved} open unusual-hours alert${res.alerts_resolved !== 1 ? 's' : ''}`)
+    } catch (e) {
+      setUhMsg(String(e))
+    } finally {
+      setUhBusy(false)
+    }
+  }
 
   async function toggleAlwaysOn(next: boolean) {
     setAoBusy(true); setAoError('')
@@ -413,6 +430,10 @@ function DeviceContent() {
                 {alwaysOn && <AvailabilityBadge avail={avail} location={device.location} />}
               </div>
             ))}
+            {identityId && (
+              <UnusualHoursToggle checked={anyHours} disabled={uhBusy} onChange={toggleAnyHours} label="Any hours" />
+            )}
+            {uhMsg && <span className="text-[11px] text-a-muted">{uhMsg}</span>}
             {aoError && <span className="text-[11px] text-red-500">{aoError}</span>}
           </div>
         </div>

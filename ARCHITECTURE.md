@@ -33,22 +33,25 @@ Fires 8 parallel API calls via `Promise.allSettled` on mount:
 | `getOpenOutages()` | Outage banner, Active Threats count |
 | `getAvailability()` | Availability summary, per-row always-on badges (refreshed every 5 min) |
 | `getAlwaysOnSuggestions()` | Suggested always-on devices panel |
+| `getUnusualHoursSuggestions()` | Suggested any-hours devices panel |
 | *(inline)* | Open threats count |
 
-Renders: outage banner (if open outages exist), 5 summary stat cards, availability summary (click a count to list those devices in the card), always-on suggestions (dismissible; hiding the panel is remembered in localStorage), bandwidth bar chart, DNS anomaly table, device table with location group headers, MAC and Manufacturer columns (randomized MACs show "Private (randomized)"), and sort/filter/pagination.
+Renders: outage banner (if open outages exist), 5 summary stat cards, availability summary (click a count to list those devices in the card), always-on and any-hours suggestion panels (same `AlwaysOnSuggestions` component; rows open the device page; dismissible, and hiding a panel is remembered in localStorage), bandwidth bar chart, DNS anomaly table, device table with location group headers, MAC and Manufacturer columns (randomized MACs show "Private (randomized)"), and sort/filter/pagination.
 
-Always-on in the device table: a checkbox column (select all on page) drives a bulk bar (Mark / Remove always on → `POST /devices/always-on`); each row has an `AlwaysOnToggle` (`PATCH /devices/{id}`, optimistic, rolled back on error) and, when tagged, an `AvailabilityBadge`. Site firewalls show "Firewall (auto)" instead of a toggle. The "Always on" filter shows tagged devices plus firewalls.
+Always-on in the device table: a checkbox column (select all on page) drives a bulk bar (Mark / Remove always on → `POST /devices/always-on`); each row has an `AlwaysOnToggle` (`PATCH /devices/{id}`, optimistic, rolled back on error) and, when tagged, an `AvailabilityBadge`. Site firewalls show "Firewall (auto)" instead of a toggle. The "Always on" filter shows tagged devices plus firewalls; the "Online" filter shows devices online now.
+
+Any hours: an "Any hours" column with an `UnusualHoursToggle` per row and bulk Allow / Remove any hours (`PATCH /devices/{id}` / `POST /devices/unusual-hours` with `unusual_hours_ok`). The backend still records odd-hour activity for these devices but stores it resolved, so it raises no alert or incident of its own yet still escalates an incident (e.g. port scan + unusual hours → HIGH). Turning it on resolves the device's open unusual-hours alerts.
 
 ### Alerts (`app/alerts/page.tsx`)
 
 Sections rendered in order:
 1. Active Threat Matches — severity-graded table, Resolve button
-   - Incidents: per-incident Resolve plus "Mark all resolved" (`POST /incidents/resolve-all`)
+   - Incidents: per-incident Resolve plus "Mark all resolved" (`POST /incidents/resolve-all`); unusual-hours incidents also get "Allow any hours" for that device
 2. CVE Matches — CVSS score, affected device + port
 3. Cleartext Protocol Usage — protocol extracted from `t.detail`, severity badge
 4. SSL/TLS Issues — color-coded by threat type, Run SSL Scan button
 5. Network Outages (30 days) — red rows + pulsing ACTIVE badge for unresolved
-6. VLAN Recommendations — priority-colored left-border cards, Firewalla rule block, Implement / Dismiss buttons
+6. VLAN Recommendations — priority-colored left-border cards, Firewalla rule block, Implement / Dismiss buttons (one card per site and kind; the backend refreshes it in place)
 7. Alert Rules — rule management
 
 ### Report (`app/report/page.tsx`)
@@ -67,7 +70,7 @@ Force-directed graph per location using `react-force-graph-2d`. Location cards a
 
 ### Device Detail (`app/device/page.tsx`)
 
-Loaded by `identity_id` query param. Shows: device header (type icon, badges, always-on toggle + availability badge; site firewalls show "always on" with the site's state), open port grid (risk-colored), port history timeline, 7-day uptime timeline bar, 48 h rolling-24h-usage chart, anomaly log.
+Loaded by `identity_id` query param. Shows: device header (type icon, badges, always-on toggle + availability badge, Any hours toggle; site firewalls show "always on" with the site's state), open port grid (risk-colored), port history timeline, 7-day uptime timeline bar, 48 h rolling-24h-usage chart, anomaly log.
 
 The bandwidth chart plots Firewalla's rolling last-24h totals as-is (`/network/bandwidth/device`). Per-interval usage can't be derived from rolling totals, so the chart doesn't try.
 

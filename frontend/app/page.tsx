@@ -8,15 +8,16 @@ import {
   getBandwidthSummary, getDnsAnomalies, getThreats, resolveThreat,
   getLifecycleSummary, getLatestReport, getOpenOutages, getIncidentCount,
   getAvailability, setAlwaysOn, bulkSetAlwaysOn, getAlwaysOnSuggestions, dismissAlwaysOnSuggestions,
+  setUnusualHoursOk, bulkSetUnusualHoursOk, getUnusualHoursSuggestions, dismissUnusualHoursSuggestions,
   fmtDate, fmtBytes, timeAgo,
   type HealthStatus, type DeviceIdentity, type Anomaly,
   type TopBandwidthDevice, type DnsAnomaly, type Threat,
   type LifecycleSummary, type LifecycleState,
   type EnhancedReport, type OutageEvent,
-  type AvailabilityStatus, type AlwaysOnSuggestion, type DeviceAvailability,
+  type AvailabilityStatus, type AlwaysOnSuggestion, type DeviceAvailability, type UnusualHoursSuggestion,
 } from '@/lib/argus'
 import ErrorBoundary from '@/components/ErrorBoundary'
-import { AlwaysOnToggle, AvailabilityBadge, AvailabilitySummary, AlwaysOnSuggestions } from '@/components/Availability'
+import { AlwaysOnToggle, AvailabilityBadge, AvailabilitySummary, AlwaysOnSuggestions, UnusualHoursToggle } from '@/components/Availability'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Cell,
@@ -199,6 +200,10 @@ export default function DashboardPage() {
     try { return typeof window !== 'undefined' && localStorage.getItem('argus_hide_always_on_suggestions') === '1' } catch { return false }
   })
   const [alwaysOnOnly,  setAlwaysOnOnly]  = useState(false)
+  const [uhSuggestions, setUhSuggestions] = useState<UnusualHoursSuggestion[]>([])
+  const [hideUhSuggest, setHideUhSuggest] = useState(() => {
+    try { return typeof window !== 'undefined' && localStorage.getItem('argus_hide_unusual_hours_suggestions') === '1' } catch { return false }
+  })
   const [selected,      setSelected]      = useState<Set<string>>(new Set())
   const [pendingIds,    setPendingIds]    = useState<Set<string>>(new Set())
   const [bulkMsg,       setBulkMsg]       = useState('')
@@ -206,6 +211,7 @@ export default function DashboardPage() {
   const [search,    setSearch]    = useState('')
   const [osFilter,  setOsFilter]  = useState('')
   const [newOnly,   setNewOnly]   = useState(false)
+  const [onlineOnly, setOnlineOnly] = useState(false)
   const [locFilter, setLocFilter] = useState<LocationFilter>(() => {
     if (typeof window !== 'undefined') {
       return (localStorage.getItem('argus_loc_filter') as LocationFilter) ?? 'all'
@@ -259,9 +265,10 @@ export default function DashboardPage() {
   }, [])
 
   const loadAvailability = useCallback(async () => {
-    const [av, sg] = await Promise.allSettled([getAvailability(), getAlwaysOnSuggestions()])
+    const [av, sg, uh] = await Promise.allSettled([getAvailability(), getAlwaysOnSuggestions(), getUnusualHoursSuggestions()])
     if (av.status === 'fulfilled') setAvailability(av.value)
     if (sg.status === 'fulfilled') setSuggestions(sg.value)
+    if (uh.status === 'fulfilled') setUhSuggestions(uh.value)
   }, [])
 
   useEffect(() => { load() }, [load])
@@ -292,6 +299,28 @@ export default function DashboardPage() {
       setPendingIds(prev => { const n = new Set(prev); ids.forEach(i => n.delete(i)); return n })
       loadAvailability()
     }
+  }
+
+  async function applyUnusualHours(ids: string[], ok: boolean) {
+    if (ids.length === 0) return
+    setPendingIds(prev => new Set([...prev, ...ids]))
+    setDevices(prev => prev.map(d => ids.includes(d.identity_id) ? { ...d, unusual_hours_ok: ok } : d))
+    try {
+      const res = ids.length === 1 ? await setUnusualHoursOk(ids[0], ok) : await bulkSetUnusualHoursOk(ids, ok)
+      const cleared = res.alerts_resolved ? ` Resolved ${res.alerts_resolved} open unusual-hours alert${res.alerts_resolved !== 1 ? 's' : ''}.` : ''
+      setBulkMsg(`${ok ? 'Allowed' : 'Removed'} any hours for ${ids.length} device${ids.length !== 1 ? 's' : ''}.${cleared}`)
+    } catch (e) {
+      setDevices(prev => prev.map(d => ids.includes(d.identity_id) ? { ...d, unusual_hours_ok: !ok } : d))
+      setBulkMsg(`Failed: ${String(e)}`)
+    } finally {
+      setPendingIds(prev => { const n = new Set(prev); ids.forEach(i => n.delete(i)); return n })
+      loadAvailability()
+    }
+  }
+
+  function hideUhSuggestions() {
+    setHideUhSuggest(true)
+    try { localStorage.setItem('argus_hide_unusual_hours_suggestions', '1') } catch { /* private mode */ }
   }
 
   function hideSuggestions() {
@@ -356,6 +385,7 @@ export default function DashboardPage() {
       if (q && !d.ip.includes(q) && !d.display_name.toLowerCase().includes(q) && !(d.current_mac ?? '').toLowerCase().includes(q) && !(d.canonical_friendly_name?.toLowerCase() ?? '').includes(q)) return false
       if (osFilter && d.os !== osFilter) return false
       if (newOnly && !d.is_new) return false
+      if (onlineOnly && !d.is_online) return false
       if (alwaysOnOnly && !d.always_on && !gatewayIds.has(d.identity_id)) return false
       if (lcFilter !== 'all') {
         const state = (d as DeviceIdentity & { lifecycle_state?: string }).lifecycle_state ?? 'active'
@@ -579,6 +609,27 @@ export default function DashboardPage() {
                 setSuggestions(prev => prev.filter(s => !ids.includes(s.device_id)))
               }}
               onHide={hideSuggestions}
+            />
+          )}
+
+          {!hideUhSuggest && uhSuggestions.length > 0 && (
+            <AlwaysOnSuggestions
+              key={'uh:' + uhSuggestions.map(s => s.device_id).join(',')}
+              suggestions={uhSuggestions}
+              icon="🌙"
+              title="Suggested any-hours devices"
+              blurb="Cameras, access points and other devices that are active around the clock, or that keep raising unusual-hours alerts. Allowing any hours stops those alerts and resolves the open ones."
+              actionLabel={n => `Allow any hours for ${n}`}
+              accent="border-l-amber-500"
+              onTag={async ids => {
+                await applyUnusualHours(ids, true)
+                setUhSuggestions(prev => prev.filter(s => !ids.includes(s.device_id)))
+              }}
+              onDismiss={async ids => {
+                await dismissUnusualHoursSuggestions(ids)
+                setUhSuggestions(prev => prev.filter(s => !ids.includes(s.device_id)))
+              }}
+              onHide={hideUhSuggestions}
             />
           )}
 
@@ -850,6 +901,16 @@ export default function DashboardPage() {
             <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
               <input
                 type="checkbox"
+                checked={onlineOnly}
+                onChange={e => { setOnlineOnly(e.target.checked); setPage(0) }}
+                className="accent-indigo-600 w-4 h-4 rounded"
+              />
+              Online ({onlineCount})
+            </label>
+
+            <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+              <input
+                type="checkbox"
                 checked={alwaysOnOnly}
                 onChange={e => { setAlwaysOnOnly(e.target.checked); setPage(0) }}
                 className="accent-indigo-600 w-4 h-4 rounded"
@@ -876,6 +937,18 @@ export default function DashboardPage() {
                     className="px-3 py-1 bg-white border border-gray-200 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-50"
                   >
                     Remove always on
+                  </button>
+                  <button
+                    onClick={async () => { await applyUnusualHours([...selected], true); setSelected(new Set()) }}
+                    className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold rounded-lg"
+                  >
+                    Allow any hours
+                  </button>
+                  <button
+                    onClick={async () => { await applyUnusualHours([...selected], false); setSelected(new Set()) }}
+                    className="px-3 py-1 bg-white border border-gray-200 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-50"
+                  >
+                    Remove any hours
                   </button>
                   <button onClick={() => setSelected(new Set())} className="text-xs text-indigo-600 hover:underline">Clear</button>
                 </>
@@ -933,6 +1006,7 @@ export default function DashboardPage() {
                     <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider hidden md:table-cell">Manufacturer</th>
                     <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Location</th>
                     <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Always on</th>
+                    <th className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider" title="Allowed to be active at any hour: no unusual-hours alerts">Any hours</th>
                     <th
                       className="text-left px-4 py-3 text-[10px] font-semibold text-gray-400 uppercase tracking-wider cursor-pointer hover:text-gray-600 select-none"
                       onClick={() => toggleSort('status')}
@@ -952,7 +1026,7 @@ export default function DashboardPage() {
                     <>
                       {loc && locFilter === 'all' && (
                         <tr key={`header-${loc}`}>
-                          <td colSpan={10} className={`px-4 py-2 text-[10px] text-gray-500 font-semibold uppercase tracking-widest bg-gray-50 border-b border-gray-100 border-l-2 ${LOC_CONFIG[loc]?.border ?? 'border-l-gray-300'}`}>
+                          <td colSpan={11} className={`px-4 py-2 text-[10px] text-gray-500 font-semibold uppercase tracking-widest bg-gray-50 border-b border-gray-100 border-l-2 ${LOC_CONFIG[loc]?.border ?? 'border-l-gray-300'}`}>
                             {LOC_CONFIG[loc]?.label ?? loc} <span className="font-normal text-gray-400">({rows.length} shown)</span>
                           </td>
                         </tr>
@@ -1032,6 +1106,13 @@ export default function DashboardPage() {
                                 {d.always_on && <AvailabilityBadge avail={availById[d.identity_id]} location={d.location} />}
                               </div>
                             )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <UnusualHoursToggle
+                              checked={d.unusual_hours_ok}
+                              disabled={pendingIds.has(d.identity_id)}
+                              onChange={next => applyUnusualHours([d.identity_id], next)}
+                            />
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex flex-col gap-0.5">

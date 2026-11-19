@@ -217,6 +217,8 @@ export interface DeviceIdentity extends Device {
   lifecycle_updated_at?:     string | null
   first_seen?:               string
   always_on:                 boolean
+  /** Allowed to be active at any hour: the unusual-hours detector skips it. */
+  unusual_hours_ok:          boolean
 }
 
 export interface MapDevice {
@@ -776,6 +778,7 @@ function normalizeIdentity(d: Record<string, unknown>): DeviceIdentity {
     lifecycle_updated_at:      (d.lifecycle_updated_at as string) ?? null,
     is_guest:                  Boolean(d.is_guest),
     always_on:                 Boolean(d.always_on),
+    unusual_hours_ok:          Boolean(d.unusual_hours_ok),
   }
 }
 
@@ -1082,3 +1085,22 @@ export const bulkSetAlwaysOn = (deviceIds: string[], alwaysOn: boolean) =>
 export const getAlwaysOnSuggestions = () => argusGet<AlwaysOnSuggestion[]>('/availability/suggestions')
 export const dismissAlwaysOnSuggestions = (deviceIds: string[]) =>
   argusPost<{ dismissed: number }>('/availability/suggestions/dismiss', { device_ids: deviceIds })
+
+// ── Unusual-hours override ───────────────────────────────────────────────────
+
+export interface UnusualHoursSuggestion extends AlwaysOnSuggestion {
+  alert_count: number
+  last_alert:  string | null
+}
+
+/** Turning it on also resolves the device's open unusual-hours alerts and incidents. */
+export const setUnusualHoursOk = (deviceId: string, ok: boolean) =>
+  argusPost<{ identity_id: string; unusual_hours_ok: boolean; alerts_resolved?: number }>(
+    `/devices/${encodeURIComponent(deviceId)}`, { unusual_hours_ok: ok }, 'PATCH')
+export const bulkSetUnusualHoursOk = (deviceIds: string[], ok: boolean) =>
+  argusPost<{ updated: string[]; not_found: string[]; unusual_hours_ok: boolean; alerts_resolved: number }>(
+    '/devices/unusual-hours', { device_ids: deviceIds, unusual_hours_ok: ok })
+export const getUnusualHoursSuggestions = () =>
+  argusGet<UnusualHoursSuggestion[]>('/availability/unusual-hours-suggestions')
+export const dismissUnusualHoursSuggestions = (deviceIds: string[]) =>
+  argusPost<{ dismissed: number }>('/availability/unusual-hours-suggestions/dismiss', { device_ids: deviceIds })

@@ -2,8 +2,25 @@
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-11-18
+
+Needs argus-api 0.6.0.
+
+### Added
+- Device table: "Online (N)" filter for devices online now.
+- Per-device "Any hours" override: devices allowed to be active at any hour get no unusual-hours alerts, and turning it on resolves their open ones (and incidents made only of them). Their odd-hour activity is still recorded silently, so a port scan or malicious-IP contact in the same 6-hour window still escalates to HIGH.
+  - Device table: "Any hours" toggle column and bulk "Allow any hours" / "Remove any hours".
+  - Dashboard: "Suggested any-hours devices" panel (devices with unusual-hours alerts in 30 days first, then cameras / APs / similar).
+  - Device page: "Any hours" toggle. Alerts: "Allow any hours" button on unusual-hours incidents.
+
 ### Changed
 - Suggested always-on devices: clicking a row opens that device's detail page. The checkbox and ✕ still select and dismiss.
+
+### Fixed (backend, argus-api 0.6.0; no UI change needed)
+- Guest devices: site gateways, always-on devices and long-present online devices are no longer shown as guests; gateways are named `MSP_Firewalla` / `PHX_Firewalla` / `CBN_Firewalla`.
+- Wrong location colour in Top Bandwidth (e.g. Andy's MacBook Air shown as MSP): several devices had been merged into one identity via stale reverse-DNS hostnames; they are split and the merge is prevented.
+- Incidents: threats on one device within 6 hours now join one incident instead of opening one each.
+- VLAN Recommendations: one card per site and kind, refreshed in place, instead of a new card every time the device count changed (23 → 5).
 
 ## [1.3.2] — 2026-11-17
 

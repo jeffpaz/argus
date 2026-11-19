@@ -9,7 +9,7 @@ import {
   getThreats, getOutageHistory, getVlanRecommendations, updateVlanRecommendation,
   runVlanAnalysis, getSslIssues, triggerSslScan,
   getGroupedAlerts, getAlertHistory, getAlertMutes, createAlertMute, deleteAlertMute,
-  getIncidents, getIncidentDetail, updateIncident, resolveAllIncidents, getIncidentCount,
+  getIncidents, getIncidentDetail, updateIncident, resolveAllIncidents, getIncidentCount, setUnusualHoursOk,
   fmtDate, timeAgo,
   type AlertRule, type AlertHistoryEntry, type CveSummary, type CveMatch,
   type Threat, type OutageEvent, type VlanRecommendation, type SslIssue,
@@ -603,6 +603,22 @@ export default function AlertsPage() {
                           className="px-2.5 py-1 text-[11px] border border-gray-200 rounded-lg hover:bg-green-50 hover:text-green-600 text-gray-500 transition-colors"
                         >
                           Mark Resolved
+                        </button>
+                      )}
+                      {inc.status !== 'resolved' && inc.identity_id && inc.title.startsWith('Unusual Hours') && (
+                        <button
+                          onClick={async () => {
+                            try {
+                              await setUnusualHoursOk(inc.identity_id, true)
+                              await loadIncidents(incidentFilter)
+                            } catch (e) {
+                              alert(`Failed: ${e}`)
+                            }
+                          }}
+                          title="Stop unusual-hours alerts for this device and resolve its open ones"
+                          className="px-2.5 py-1 text-[11px] border border-amber-200 rounded-lg hover:bg-amber-50 hover:text-amber-700 text-amber-600 transition-colors"
+                        >
+                          🌙 Allow any hours for {inc.display_name || 'this device'}
                         </button>
                       )}
                     </div>
