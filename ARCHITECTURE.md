@@ -46,7 +46,8 @@ Any hours: an "Any hours" column with an `UnusualHoursToggle` per row and bulk A
 
 Sections rendered in order:
 1. Active Threat Matches — severity-graded table, Resolve button
-   - Incidents: per-incident Resolve plus "Mark all resolved" (`POST /incidents/resolve-all`); unusual-hours incidents also get "Allow any hours" for that device
+   - Incidents: per-incident Resolve plus "Mark all resolved" (`POST /incidents/resolve-all`); unusual-hours incidents also get "Allow any hours" for that device; when the title ends with the device's name, the name links to `/device?identity_id=`
+   - Recent Alerts (24h): grouped alert history (same device + type collapse into one ×N row), client-side Location and Type filters (options come from the loaded alerts), newest 10 rows with a "Show all N rows" toggle
 2. CVE Matches — CVSS score, affected device + port
 3. Cleartext Protocol Usage — protocol extracted from `t.detail`, severity badge
 4. SSL/TLS Issues — color-coded by threat type, Run SSL Scan button
@@ -70,7 +71,9 @@ Force-directed graph per location using `react-force-graph-2d`. Location cards a
 
 ### Device Detail (`app/device/page.tsx`)
 
-Loaded by `identity_id` query param. Shows: device header (type icon, badges, always-on toggle + availability badge, Any hours toggle; site firewalls show "always on" with the site's state), open port grid (risk-colored), port history timeline, 7-day uptime timeline bar, 48 h rolling-24h-usage chart, anomaly log.
+Loaded by `identity_id` query param. Shows: device header (type icon, badges, always-on toggle + availability badge, Any hours toggle; site firewalls show "always on" with the site's state; "Delete device" with an in-page confirmation, hidden for site firewalls), open port grid (risk-colored), port history timeline, 7-day uptime timeline bar, 48 h rolling-24h-usage chart, anomaly log.
+
+Delete device calls `DELETE /devices/{id}` (argus-api 0.6.1), which removes the identity, its `devices` and `port_history` rows and everything keyed to the identity (alerts, incidents, threat matches, CVE/SSL, uptime/bandwidth, lifecycle, availability, dismissals, mutes), then navigates to `/`. Raw per-MAC telemetry is left to retention. A device still on the network is rediscovered as a new device on the next scan.
 
 The bandwidth chart plots Firewalla's rolling last-24h totals as-is (`/network/bandwidth/device`). Per-interval usage can't be derived from rolling totals, so the chart doesn't try.
 

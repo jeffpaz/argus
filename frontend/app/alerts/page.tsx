@@ -156,6 +156,9 @@ export default function AlertsPage() {
   const [ruleHistory, setRuleHistory] = useState<AlertHistoryEntry[]>([])
   const [mutes, setMutes] = useState<AlertMute[]>([])
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
+  const [alertLocFilter, setAlertLocFilter] = useState<string>('all')
+  const [alertTypeFilter, setAlertTypeFilter] = useState<string>('all')
+  const [showAllAlerts, setShowAllAlerts] = useState(false)
   const [loading, setLoading] = useState(true)
   const [editRule, setEditRule] = useState<Partial<AlertRule> | null>(null)
   const [editMode, setEditMode] = useState<'create' | 'edit'>('create')
@@ -450,6 +453,17 @@ export default function AlertsPage() {
   // Total alert count across all groups
   const totalAlerts = grouped.reduce((sum, g) => sum + g.count, 0)
 
+  // Recent Alerts: location/type filters, newest 10 rows unless expanded
+  const RECENT_ALERTS_LIMIT = 10
+  const alertLocations = Array.from(new Set(grouped.map(g => g.location).filter(Boolean) as string[])).sort()
+  const alertTypes = Array.from(new Set(grouped.map(g => g.trigger_type).filter(Boolean)))
+    .sort((a, b) => (TRIGGER_LABELS[a] ?? a).localeCompare(TRIGGER_LABELS[b] ?? b))
+  const filteredGrouped = grouped.filter(g =>
+    (alertLocFilter === 'all' || g.location === alertLocFilter) &&
+    (alertTypeFilter === 'all' || g.trigger_type === alertTypeFilter)
+  )
+  const visibleGrouped = showAllAlerts ? filteredGrouped : filteredGrouped.slice(0, RECENT_ALERTS_LIMIT)
+
   if (loading) {
     return (
       <div className="min-h-screen bg-a-bg flex items-center justify-center text-gray-400 text-sm">
@@ -542,7 +556,25 @@ export default function AlertsPage() {
                           <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${SEV_BADGE[inc.severity] ?? 'bg-gray-100 text-gray-600'}`}>
                             {inc.severity}
                           </span>
-                          <span className="font-semibold text-sm text-gray-900 truncate">{inc.title}</span>
+                          {(() => {
+                            // Make the device name in "<Kind> — <Device>" a link to its detail page.
+                            const name = inc.display_name
+                            if (!inc.identity_id || !name || !inc.title.endsWith(name)) {
+                              return <span className="font-semibold text-sm text-gray-900 truncate">{inc.title}</span>
+                            }
+                            return (
+                              <span className="font-semibold text-sm text-gray-900 truncate">
+                                {inc.title.slice(0, inc.title.length - name.length)}
+                                <Link
+                                  href={`/device?identity_id=${encodeURIComponent(inc.identity_id)}`}
+                                  title={`Open ${name} device details`}
+                                  className="hover:text-indigo-600 hover:underline underline-offset-2 decoration-indigo-300 transition-colors"
+                                >
+                                  {name}
+                                </Link>
+                              </span>
+                            )
+                          })()}
                         </div>
                         <div className="text-[11px] text-gray-500 flex items-center gap-2 flex-wrap">
                           {inc.location && <LocationBadge location={inc.location} />}
@@ -640,11 +672,35 @@ export default function AlertsPage() {
                 </span>
               )}
             </h2>
+            {grouped.length > 0 && (
+              <div className="flex items-center gap-2">
+                <select
+                  aria-label="Filter alerts by location"
+                  value={alertLocFilter}
+                  onChange={e => { setAlertLocFilter(e.target.value); setShowAllAlerts(false) }}
+                  className="border border-gray-200 rounded-lg px-2 py-1 text-[11px] text-gray-600 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                >
+                  <option value="all">All locations</option>
+                  {alertLocations.map(l => <option key={l} value={l}>{l}</option>)}
+                </select>
+                <select
+                  aria-label="Filter alerts by type"
+                  value={alertTypeFilter}
+                  onChange={e => { setAlertTypeFilter(e.target.value); setShowAllAlerts(false) }}
+                  className="border border-gray-200 rounded-lg px-2 py-1 text-[11px] text-gray-600 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                >
+                  <option value="all">All types</option>
+                  {alertTypes.map(t => <option key={t} value={t}>{TRIGGER_LABELS[t] ?? t}</option>)}
+                </select>
+              </div>
+            )}
           </div>
           {grouped.length === 0 ? (
             <div className="text-green-600 text-sm flex items-center gap-2">
               <span>✅</span> No alerts fired yet
             </div>
+          ) : filteredGrouped.length === 0 ? (
+            <div className="text-gray-400 text-xs py-2">No alerts match these filters.</div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
@@ -660,7 +716,7 @@ export default function AlertsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {grouped.map(g => {
+                  {visibleGrouped.map(g => {
                     const isExpanded = expandedKeys.has(g.group_key)
                     const isGrouped = g.count > 1
                     return (
@@ -743,6 +799,16 @@ export default function AlertsPage() {
                   })}
                 </tbody>
               </table>
+              {filteredGrouped.length > RECENT_ALERTS_LIMIT && (
+                <button
+                  onClick={() => setShowAllAlerts(v => !v)}
+                  className="mt-3 text-[11px] text-indigo-600 hover:text-indigo-800 hover:underline"
+                >
+                  {showAllAlerts
+                    ? `Show newest ${RECENT_ALERTS_LIMIT}`
+                    : `Show all ${filteredGrouped.length} rows`}
+                </button>
+              )}
             </div>
           )}
         </div>

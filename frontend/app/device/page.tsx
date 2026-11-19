@@ -1,14 +1,14 @@
 'use client'
 
 import { useState, useEffect, Suspense } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   getDeviceDetail, getDevicePortHistory, getDeviceAnomalies, getDeviceUptime,
   getDeviceBandwidthHistory, getDeviceDnsAnomalies, getIdentityDnsAnomalies,
   getIdentityDetail, getIdentityBandwidth, getIdentityUptime,
   getLifecycleEvents, getDeviceCves, resolveCve,
-  getAvailability, setAlwaysOn, setUnusualHoursOk,
+  getAvailability, setAlwaysOn, setUnusualHoursOk, deleteDevice,
   fmtDate, fmtBytes, timeAgo,
   type DeviceDetail, type DeviceIdentity, type PortScanSnapshot, type Anomaly,
   type PortInfo, type UptimeDetail, type DeviceBandwidthPoint, type DnsAnomaly,
@@ -256,6 +256,21 @@ function DeviceContent() {
   const [anyHours,      setAnyHours]      = useState(false)
   const [uhBusy,        setUhBusy]        = useState(false)
   const [uhMsg,         setUhMsg]         = useState('')
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [delBusy,       setDelBusy]       = useState(false)
+  const [delError,      setDelError]      = useState('')
+  const router = useRouter()
+
+  async function handleDelete() {
+    setDelBusy(true); setDelError('')
+    try {
+      await deleteDevice(identityId)
+      router.push('/')
+    } catch (e) {
+      setDelError(String(e))
+      setDelBusy(false)
+    }
+  }
 
   useEffect(() => {
     if (!identityId) return
@@ -435,6 +450,42 @@ function DeviceContent() {
             )}
             {uhMsg && <span className="text-[11px] text-a-muted">{uhMsg}</span>}
             {aoError && <span className="text-[11px] text-red-500">{aoError}</span>}
+            {identityId && !gatewaySite && !confirmDelete && (
+              <button
+                onClick={() => { setConfirmDelete(true); setDelError('') }}
+                className="text-[11px] px-2 py-1 border border-a-border rounded text-a-muted hover:text-red-600 hover:border-red-300 hover:bg-red-50 transition-colors"
+              >
+                🗑 Delete device
+              </button>
+            )}
+            {identityId && confirmDelete && (
+              <div className="max-w-xs border border-red-200 bg-red-50 rounded-lg p-3 text-[11px] text-red-700">
+                <div className="font-semibold mb-1">
+                  Delete {('display_name' in device ? device.display_name : null) || device.hostname || 'this device'}?
+                </div>
+                <div className="text-red-600/90 mb-2">
+                  Removes the device and all its history: alerts, incidents, bandwidth, uptime, CVEs.
+                  {isOnline === true && ' It is online now, so the next scan will add it back as a new device.'}
+                </div>
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => setConfirmDelete(false)}
+                    disabled={delBusy}
+                    className="px-2 py-1 border border-gray-200 bg-white rounded text-gray-600 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleDelete}
+                    disabled={delBusy}
+                    className="px-2 py-1 rounded bg-red-600 text-white font-semibold hover:bg-red-700 disabled:opacity-60"
+                  >
+                    {delBusy ? 'Deleting…' : 'Delete'}
+                  </button>
+                </div>
+                {delError && <div className="mt-2 text-red-600">{delError}</div>}
+              </div>
+            )}
           </div>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mt-5 text-xs">

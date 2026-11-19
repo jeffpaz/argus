@@ -32,10 +32,10 @@ Argus is a self-hosted network security monitor. It discovers devices across thr
 | Route | Description |
 |---|---|
 | `/` | Dashboard — outage banner, 5 stat cards (devices, new, threats, last scan, health score), availability summary (per-site up/down, always-on online/offline counts; click a count to list those devices), always-on suggestions, bandwidth chart, DNS anomalies, any-hours suggestions, device table (MAC + manufacturer columns, always-on toggle + badge and Any hours toggle per row, bulk select, Online and Always on filters) |
-| `/alerts` | Alerts — cleartext protocols, SSL/TLS issues, network outages, VLAN recommendations, active threats and incidents (bulk "Mark all resolved", "Allow any hours" on unusual-hours incidents), CVEs |
+| `/alerts` | Alerts — cleartext protocols, SSL/TLS issues, network outages, VLAN recommendations, active threats and incidents (bulk "Mark all resolved", "Allow any hours" on unusual-hours incidents, device name in the title links to the device), recent alerts (24h; newest 10 rows with Show all, Location and Type filters), CVEs |
 | `/report` | Security report — health score grade, history sidebar, Generate Now, Download HTML, iframe report viewer |
 | `/map` | Network map — force-directed topology per location |
-| `/device?identity_id=` | Device detail — always-on toggle + availability badge, Any hours toggle, port history, uptime timeline, rolling 24h usage chart, anomaly log |
+| `/device?identity_id=` | Device detail — always-on toggle + availability badge, Any hours toggle, Delete device (with confirmation), port history, uptime timeline, rolling 24h usage chart, anomaly log |
 | `/guests` | Guest/lifecycle summary |
 
 ## Getting Started
@@ -79,6 +79,7 @@ CI/CD: pushes to `main` deploy automatically via Firebase Hosting GitHub integra
 | GET | `/availability/unusual-hours-suggestions` | Dashboard |
 | POST | `/availability/unusual-hours-suggestions/dismiss` | Dashboard |
 | PATCH | `/devices/{id}` | Always on / Any hours toggles (Dashboard, Device, Alerts) |
+| DELETE | `/devices/{id}` | Device page "Delete device" |
 | POST | `/devices/always-on` | Dashboard bulk action, suggestions |
 | POST | `/devices/unusual-hours` | Dashboard bulk action, any-hours suggestions |
 | GET | `/flows/threats` | Dashboard, Alerts |

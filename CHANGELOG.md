@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.4.1] — 2026-11-19
+
+Needs argus-api 0.6.1.
+
+### Added
+- Device page: "Delete device" button (with an in-page confirmation) removes the device and all its history, then returns to the dashboard. Not shown for site firewalls. A device that is still online comes back as a new device on the next scan.
+
+### Changed
+- Incidents: the device name in an incident title (e.g. "Unusual Hours — Arlo") links to that device's detail page; it highlights and underlines on hover.
+- Recent Alerts (24h): shows the newest 10 rows, with "Show all N rows" to expand, and has Location and Type filters.
+
 ## [1.4.0] — 2026-11-18
 
 Needs argus-api 0.6.0.

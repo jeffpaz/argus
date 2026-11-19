@@ -1097,7 +1097,10 @@ export interface UnusualHoursSuggestion extends AlwaysOnSuggestion {
 export const setUnusualHoursOk = (deviceId: string, ok: boolean) =>
   argusPost<{ identity_id: string; unusual_hours_ok: boolean; alerts_resolved?: number }>(
     `/devices/${encodeURIComponent(deviceId)}`, { unusual_hours_ok: ok }, 'PATCH')
-export const bulkSetUnusualHoursOk = (deviceIds: string[], ok: boolean) =>
+export const deleteDevice = (deviceId: string) =>
+  argusPost<{ identity_id: string; display_name: string | null; macs: string[]; deleted: Record<string, number> }>(
+    `/devices/${encodeURIComponent(deviceId)}`, undefined, 'DELETE')
+export const bulkSetUnusualHoursOk =(deviceIds: string[], ok: boolean) =>
   argusPost<{ updated: string[]; not_found: string[]; unusual_hours_ok: boolean; alerts_resolved: number }>(
     '/devices/unusual-hours', { device_ids: deviceIds, unusual_hours_ok: ok })
 export const getUnusualHoursSuggestions = () =>
